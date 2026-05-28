@@ -1,0 +1,2087 @@
+"""
+Mahakaal Options Sniper v5.0
+=============================
+GCP VM | Kotak Neo | Zero Brokerage
+Scalp Trends. Sell Chop. Stay Silent Otherwise.
+
+Architecture:
+  Day Classification  → 15-min ADX + ER + OR + Gap + VWAP (locked 10:30 AM)
+  Scalp Mode          → 5 lots | Supertrend + Pivot + OR break + VWAP + L2
+  Sell Mode           → 2 lots | Spreads only | After 10:30 AM | DTE 3-5
+  No Trade            → Mixed signals → complete silence
+
+Schedule:
+  8:30 AM  → Auto TOTP login
+  9:00 AM  → Pre-market brief
+  9:15 AM  → OR tracking
+  9:30 AM  → OR lock + asset check
+  9:45 AM  → Tentative classification
+  10:30 AM → Mode LOCKED
+  Every 5m → Signals + monitor
+  2:30 PM  → Hard exit sells
+  2:55 PM  → Pre-close
+  3:00 PM  → Hard exit all
+  3:30 PM  → EOD summary
+"""
+
+import os, json, math, time, threading, requests, pyotp
+from datetime import datetime, timedelta
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+from neo_api_client import NeoAPI
+
+# ===== ENV LOADER =====
+ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.vars")
+if os.path.exists(ENV_PATH):
+    with open(ENV_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+KOTAK_CONSUMER_KEY = os.getenv("KOTAK_CONSUMER_KEY", "")
+KOTAK_MOBILE       = os.getenv("KOTAK_MOBILE", "")
+KOTAK_MPIN         = os.getenv("KOTAK_MPIN", "")
+KOTAK_UCC          = os.getenv("KOTAK_UCC", "")
+KOTAK_TOTP_SECRET  = os.getenv("KOTAK_TOTP_SECRET", "")
+TG_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT            = os.getenv("TELEGRAM_CHAT_ID", "")
+PAPER              = os.getenv("PAPER_TRADE_MODE", "true").lower() == "true"
+IST                = pytz.timezone("Asia/Kolkata")
+IV_FILE            = "iv_history.json"
+
+# ===== KOTAK NEO CLIENT =====
+_neo = None
+_neo_lock = threading.Loc
+
+def neo():
+    with _neo_lock: return _neo
+
+print(f"[{datetime.now(IST)}] Mahakaal v5.0 starting | Paper={PAPER}")
+
+# ===== UTILS =====
+def now_ist(): return datetime.now(IST)
+def today_str(): return now_ist().strftime("%Y-%m-%d")
+
+def percentile(data, p):
+    if not data or len(data) < 2: return None
+    s = sorted(data); k = (len(s)-1)*(p/100)
+    f = math.floor(k); c = math.ceil(k)
+    return s[int(k)] if f==c else s[f]*(c-k)+s[c]*(k-f)
+
+# ===== HOLIDAYS =====
+NSE_HOLIDAYS = {"2026-05-01","2026-06-17","2026-08-27","2026-10-02",
+                "2026-10-14","2026-11-05","2026-11-06","2026-12-25"}
+def is_holiday(): return today_str() in NSE_HOLIDAYS
+def is_weekend(): return now_ist().weekday() > 4
+def is_trading_day(): return not is_weekend() and not is_holiday()
+
+# ===== UNDERLYINGS =====
+UNDERLYINGS = {
+    "nifty": {
+        "name":"NIFTY", "exchange":"NSE",
+        "ltp_symbol":"NSE_NIFTY", "groww_symbol":"NSE-NIFTY",
+        "index_segment":"nse_cm", "fo_segment":"nse_fo",
+        "symbol_prefix":"NIFTY", "expiry_weekday":1,
+        "lot_size":75, "strike_gap":50,
+        "scalp_qty": 5*75,   # 375
+        "sell_qty":  2*75,   # 150
+    },
+    "sensex": {
+        "name":"SENSEX", "exchange":"BSE",
+        "ltp_symbol":"BSE_SENSEX", "groww_symbol":"BSE-SENSEX",
+        "index_segment":"bse_cm", "fo_segment":"bse_fo",
+        "symbol_prefix":"SENSEX", "expiry_weekday":3,
+        "lot_size":20, "strike_gap":100,
+        "scalp_qty": 5*20,   # 100
+        "sell_qty":  2*20,   # 40
+    },
+}
+DAY_MAP = {0:"sensex",1:"sensex",2:"nifty",3:"nifty",4:"nifty"}
+
+def get_underlying():
+    k = DAY_MAP.get(now_ist().weekday(), "nifty")
+    return k, UNDERLYINGS[k]
+
+def is_expiry(key=None):
+    if key is None: key,_ = get_underlying()
+    return now_ist().weekday() == UNDERLYINGS[key]["expiry_weekday"]
+
+def oi_thresh(key):
+    return (50_000,200_000,500_000) if key=="sensex" else (500_000,2_000_000,5_000_000)
+
+# ===== PARAMETERS =====
+# Day classification thresholds
+TREND_ER    = 0.50;  CHOP_ER    = 0.25
+TREND_ADX   = 25;    CHOP_ADX   = 20
+TREND_OR    = 1.5;   CHOP_OR    = 0.8   # × ATR
+TREND_GAP   = 0.5;   CHOP_GAP   = 0.3   # %
+CLASSIFY_AT = (10, 30)   # 10:30 AM lock
+EARLY_AT    = (9,  45)   # 9:45 AM tentative
+
+# Scalp parameters
+SCALP_LOTS     = 5
+SCALP_SL_PTS   = 20     # ₹20 SL on option premium
+SCALP_TGT_PTS  = 30     # ₹30 target (1:1.5)
+SCALP_TIME_STOP = 10    # minutes
+MAX_SCALPS     = 3
+L2_RATIO_CALL  = 2.0    # bid/ask > 2 for call buy
+L2_RATIO_PUT   = 2.0    # ask/bid > 2 for put buy
+ST_PERIOD      = 10     # Supertrend period
+ST_MULT        = 3.0    # Supertrend multiplier
+
+# Sell parameters
+SELL_LOTS      = 2
+SELL_MIN_SCORE = 65
+SELL_MIN_DTE   = 3
+SELL_MAX_DTE   = 5
+SELL_TARGET_PCT = 0.50  # 50% credit capture
+SELL_SL_MULT   = 1.5    # SL at 1.5× credit
+MAX_SELLS      = 2
+SELL_START_HOUR = 10
+SELL_START_MIN  = 30
+SELL_HARD_EXIT  = (14, 30)
+
+# Premium viability for scalping
+SCALP_PREMIUM_MIN = 80
+SCALP_PREMIUM_MAX = 350
+
+# Risk
+DAILY_LOSS_LIMIT = 15_000
+KILL_SWITCH_SL   = 2
+DAILY_TARGET     = 5_000
+SIGNAL_DEDUP     = 120   # seconds
+
+# ===== STATE =====
+OR_STATE = {
+    "date":None,"high":None,"low":None,"ticks":0,
+    "locked":False,"announced":False,
+    "gap_type":"UNKNOWN","gap_pct":0.0,"gap_fixed":False,
+}
+OR_L = threading.Lock()
+
+DAY_STATE = {
+    "date":None,"mode":None,"mode_locked":False,
+    "trend_score":0,"chop_score":0,
+    "er":None,"adx":None,"or_ratio":None,
+    "gap_pct":0.0,"vwap_dir":None,
+    "asset":None,"asset_premium":None,
+}
+DAY_L = threading.Lock()
+
+REGIME = {
+    "dir":None,"score":None,"time":None,"pcr":None,
+    "top_ce":None,"top_pe":None,"reversal":False,
+    "ce_mult":0,"pe_mult":0,"st_signal":None,
+}
+REG_L = threading.Lock()
+
+RISK = {
+    "date":None,"sl_hits":0,"sell_sl":0,"scalp_sl":0,
+    "halted":False,"scalps":0,"sells":0,
+    "pnl":0,"scalp_pnl":0,"sell_pnl":0,
+}
+RISK_L = threading.Lock()
+
+LAST_SIG = {"time":None,"mode":None}
+LAST_L   = threading.Lock()
+
+TRADE = {
+    "active":False,"is_buy":False,"strategy":None,
+    "short_strike":None,"short_side":None,
+    "entry_short":None,"net_credit":None,
+    "tgt_pct":None,"sl_mult":None,
+    "entry_time":None,"lots":None,"qty":None,
+    "key":None,"expiry":None,
+    "buy_strike":None,"buy_side":None,
+    "buy_entry":None,"buy_tgt":None,"buy_sl":None,
+    "l1_trig":None,"l1_sl":None,
+    "l2_trig":None,"l2_sl":None,
+    "l1_done":False,"l2_done":False,
+}
+TRADE_L = threading.Lock()
+
+API_L   = threading.Lock()
+OI_HIST = {}; OI_L = threading.Lock()
+ADAPT   = {}
+
+def adapt(key):
+    if key not in ADAPT:
+        ADAPT[key] = {"er":[],"pcr":[],"flow":[],"scores":[],"adx":[]}
+    return ADAPT[key]
+
+# ===== TELEGRAM =====
+def tg(msg, retries=3):
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    for i in range(retries):
+        try:
+            r = requests.post(url,
+                json={"chat_id":TG_CHAT,"text":msg,"parse_mode":"HTML"},
+                timeout=10)
+            if r.status_code==200: return True
+        except Exception as e:
+            print(f"[TG] Attempt {i+1}: {e}")
+            if i<retries-1: time.sleep(5)
+    return False
+
+# ===== DAILY RESET =====
+def reset_daily():
+    today = now_ist().date()
+    with RISK_L:
+        if RISK["date"]!=today:
+            RISK.update({"date":today,"sl_hits":0,"sell_sl":0,"scalp_sl":0,
+                         "halted":False,"scalps":0,"sells":0,
+                         "pnl":0,"scalp_pnl":0,"sell_pnl":0})
+            print(f"[Risk] Reset {today}")
+    with LAST_L:
+        if LAST_SIG["time"] and LAST_SIG["time"].date()<today:
+            LAST_SIG["time"]=None; LAST_SIG["mode"]=None
+    with TRADE_L:
+        if TRADE.get("entry_time") and TRADE["entry_time"].date()<today:
+            TRADE["active"]=False
+    with DAY_L:
+        if DAY_STATE["date"]!=today:
+            DAY_STATE.update({"date":today,"mode":None,"mode_locked":False,
+                              "trend_score":0,"chop_score":0,
+                              "er":None,"adx":None,"or_ratio":None,
+                              "gap_pct":0.0,"vwap_dir":None,
+                              "asset":None,"asset_premium":None})
+
+def register_sl(mode="scalp", loss=0):
+    reset_daily()
+    with RISK_L:
+        RISK["sl_hits"]+=1
+        RISK["pnl"]-=abs(loss)
+        if mode=="scalp": RISK["scalp_sl"]+=1; RISK["scalp_pnl"]-=abs(loss)
+        else: RISK["sell_sl"]+=1; RISK["sell_pnl"]-=abs(loss)
+        hits=RISK["sl_hits"]
+        if hits>=KILL_SWITCH_SL or abs(RISK["pnl"])>=DAILY_LOSS_LIMIT:
+            RISK["halted"]=True
+            tg(f"🛑 <b>KILL SWITCH</b>\n{'2 SL hits' if hits>=KILL_SWITCH_SL else 'Daily loss limit hit'}\nNo more signals today.")
+            return True
+        tg(f"⚠️ <b>SL Hit #{hits}</b> ({mode}) | -₹{abs(loss):,.0f}")
+        return False
+
+def register_profit(amount, mode="scalp"):
+    with RISK_L:
+        RISK["pnl"]+=amount
+        if mode=="scalp": RISK["scalp_pnl"]+=amount
+        else: RISK["sell_pnl"]+=amount
+
+def is_allowed():
+    reset_daily()
+    n=now_ist(); key,_=get_underlying()
+    if is_weekend(): return False,"Weekend"
+    if is_holiday(): return False,"Holiday"
+    if n.hour>=15: return False,"After 3PM"
+    if is_expiry(key) and n.hour>=14 and n.minute>=30: return False,"Expiry cutoff"
+    if n.hour<9 or (n.hour==9 and n.minute<30): return False,"Pre-market"
+    with RISK_L:
+        if RISK["halted"]: return False,"Halted"
+    return True,"OK"
+
+def time_quality(mode):
+    n=now_ist(); m=n.hour*60+n.minute
+    if m<9*60+45:     return 0.75,"Opening noise"
+    elif m<=11*60+30: return 1.00,"Prime window"
+    elif m<=12*60+30: return 0.85,"Lunch lull"
+    elif m<=14*60+30: return 0.95,"Second window"
+    elif m<=14*60+45: return (0.80,"Late scalp") if mode=="BUY" else (0.75,"Late sell")
+    else:             return 0.50,"Too late"
+
+# ===== KOTAK NEO DATA =====
+def neo_spot(key):
+    u=UNDERLYINGS[key]; client=neo()
+    if not client: return None
+    try:
+        r=client.quotes(instrument_tokens=[{"instrument_token":u["ltp_symbol"],
+            "exchange_segment":u["index_segment"]}],quote_type="ltp",isIndex=True)
+        data=r.get("data") or r.get("stk") or []
+        if data:
+            ltp=float(data[0].get("ltp") or data[0].get("iv") or 0)
+            return ltp if ltp>0 else None
+    except Exception as e: print(f"[Neo] Spot error: {e}")
+    return None
+
+def neo_expiries(key):
+    u=UNDERLYINGS[key]; client=neo()
+    if not client: return []
+    try:
+        ex=getattr(client,f"EXCHANGE_{u['exchange']}")
+        expiries=set()
+        for offset in range(3):
+            t=now_ist()+timedelta(days=30*offset)
+            r=client.get_expiries(exchange=ex,underlying_symbol=u["symbol_prefix"],
+                                  year=t.year,month=t.month)
+            if r and "expiries" in r: expiries.update(r["expiries"])
+        today=now_ist().date()
+        future=[]
+        for e in expiries:
+            for fmt in ["%d-%b-%Y","%Y-%m-%d"]:
+                try:
+                    d=datetime.strptime(e,fmt).date()
+                    if d>=today: future.append(d.strftime("%Y-%m-%d")); break
+                except: continue
+        return sorted(set(future))
+    except Exception as e:
+        print(f"[Neo] Expiry error: {e}"); return []
+
+def neo_option_chain(key, expiry_str):
+    u=UNDERLYINGS[key]; client=neo()
+    if not client: return None
+    spot=neo_spot(key)
+    if not spot: return None
+    try:
+        ex=getattr(client,f"EXCHANGE_{u['exchange']}")
+        exp_dt=datetime.strptime(expiry_str,"%Y-%m-%d")
+        exp_fmt=exp_dt.strftime("%d-%b-%Y").upper()
+        ce_r=client.search_scrip(exchange_segment=u["fo_segment"],
+            symbol=u["symbol_prefix"],expiry=exp_fmt,option_type="CE",strike_price="")
+        pe_r=client.search_scrip(exchange_segment=u["fo_segment"],
+            symbol=u["symbol_prefix"],expiry=exp_fmt,option_type="PE",strike_price="")
+        ce_list=ce_r if isinstance(ce_r,list) else (ce_r.get("data") or [])
+        pe_list=pe_r if isinstance(pe_r,list) else (pe_r.get("data") or [])
+        ce_map={}; pe_map={}
+        for item in ce_list:
+            try:
+                s=float(item.get("strprc") or item.get("strike_price") or 0)
+                t=item.get("tok") or item.get("token") or ""
+                tsym=item.get("tsym") or item.get("trading_symbol") or ""
+                if s>0 and t: ce_map[s]={"token":t,"tsym":tsym}
+            except: continue
+        for item in pe_list:
+            try:
+                s=float(item.get("strprc") or item.get("strike_price") or 0)
+                t=item.get("tok") or item.get("token") or ""
+                tsym=item.get("tsym") or item.get("trading_symbol") or ""
+                if s>0 and t: pe_map[s]={"token":t,"tsym":tsym}
+            except: continue
+        atr_est=spot*0.02
+        all_s=sorted(set(list(ce_map)+list(pe_map)))
+        near=[s for s in all_s if abs(s-spot)<=atr_est*15] or all_s
+        def fetch_q(tokens):
+            if not tokens: return {}
+            try:
+                r=client.quotes(instrument_tokens=tokens,quote_type="all",isIndex=False)
+                data=r.get("data") or r.get("stk") or []
+                return {item.get("tk") or item.get("instrument_token",""):item for item in data}
+            except: return {}
+        batch=[]
+        for s in near:
+            if s in ce_map: batch.append({"instrument_token":ce_map[s]["token"],"exchange_segment":u["fo_segment"]})
+            if s in pe_map: batch.append({"instrument_token":pe_map[s]["token"],"exchange_segment":u["fo_segment"]})
+        qdata={}
+        for i in range(0,len(batch),30):
+            qdata.update(fetch_q(batch[i:i+30]))
+            if i+30<len(batch): time.sleep(0.3)
+        with OI_L: prev=OI_HIST.get(key,{})
+        strikes=[]
+        def sf(d,k,v=0):
+            try: return float(d.get(k) or v)
+            except: return float(v)
+        for s in near:
+            ci=ce_map.get(s,{}); pi=pe_map.get(s,{})
+            cq=qdata.get(ci.get("token",""),{}); pq=qdata.get(pi.get("token",""),{})
+            ce_ltp=sf(cq,"lp") or sf(cq,"ltp")
+            pe_ltp=sf(pq,"lp") or sf(pq,"ltp")
+            if ce_ltp==0 and pe_ltp==0: continue
+            ce_oi=sf(cq,"oi"); pe_oi=sf(pq,"oi")
+            strikes.append({
+                "strike":s,
+                "ce_ltp":ce_ltp,"ce_oi":ce_oi,
+                "ce_oi_change":ce_oi-prev.get(f"{s}_ce",ce_oi),
+                "ce_volume":sf(cq,"v"),"ce_iv":sf(cq,"iv"),
+                "ce_top_bid":sf(cq,"bp1"),"ce_top_ask":sf(cq,"sp1"),
+                "ce_bid_qty":sf(cq,"bq1"),"ce_ask_qty":sf(cq,"sq1"),
+                "ce_tsym":ci.get("tsym",""),
+                "pe_ltp":pe_ltp,"pe_oi":pe_oi,
+                "pe_oi_change":pe_oi-prev.get(f"{s}_pe",pe_oi),
+                "pe_volume":sf(pq,"v"),"pe_iv":sf(pq,"iv"),
+                "pe_top_bid":sf(pq,"bp1"),"pe_top_ask":sf(pq,"sp1"),
+                "pe_bid_qty":sf(pq,"bq1"),"pe_ask_qty":sf(pq,"sq1"),
+                "pe_tsym":pi.get("tsym",""),
+            })
+        new_oi={f"{s['strike']}_ce":s["ce_oi"] for s in strikes}
+        new_oi.update({f"{s['strike']}_pe":s["pe_oi"] for s in strikes})
+        with OI_L: OI_HIST[key]=new_oi
+        return {"spot":spot,"strikes":strikes,"expiry":expiry_str}
+    except Exception as e:
+        print(f"[Neo] Chain error: {e}"); return None
+
+def neo_candles(key, mins=5, days=5):
+    u=UNDERLYINGS[key]; client=neo()
+    if not client: return None
+    try:
+        iv_map={1:client.CANDLE_INTERVAL_MIN_1,5:client.CANDLE_INTERVAL_MIN_5,
+                15:client.CANDLE_INTERVAL_MIN_15,30:client.CANDLE_INTERVAL_MIN_30,
+                60:client.CANDLE_INTERVAL_MIN_60}
+        n=now_ist(); start=n-timedelta(days=days)
+        r=client.historical(instrument_token=u["ltp_symbol"],
+            exchange_segment=u["index_segment"],
+            to_date=n.strftime("%d-%m-%Y %H:%M:%S"),
+            from_date=start.strftime("%d-%m-%Y %H:%M:%S"),
+            interval=str(mins),isIndex=True,isDepth=False)
+        data=r.get("data") or []
+        o,h,l,c,v,ts=[],[],[],[],[],[]
+        for bar in data:
+            try:
+                o.append(float(bar.get("open") or bar.get("into") or 0))
+                h.append(float(bar.get("high") or bar.get("inth") or 0))
+                l.append(float(bar.get("low")  or bar.get("intl") or 0))
+                c.append(float(bar.get("close") or bar.get("intc") or 0))
+                v.append(int(float(bar.get("volume") or bar.get("intv") or 0)))
+                t_str=bar.get("datetime") or bar.get("time") or ""
+                for fmt in ["%Y-%m-%d %H:%M:%S","%d-%m-%Y %H:%M:%S"]:
+                    try:
+                        dt=datetime.strptime(t_str,fmt).replace(tzinfo=IST)
+                        ts.append(int(dt.timestamp())); break
+                    except: continue
+                else: ts.append(0)
+            except: continue
+        return {"open":o,"high":h,"low":l,"close":c,"volume":v,"timestamp":ts}
+    except Exception as e:
+        print(f"[Neo] Candles error: {e}"); return None
+
+# ===== INDICATORS =====
+def ts_to_dt(ts):
+    v=int(ts); return datetime.fromtimestamp(v/1000 if v>1e10 else v,IST)
+
+def get_today_candles(candles, from_min=30):
+    today=now_ist().date()
+    cutoff=now_ist().replace(hour=9,minute=from_min,second=0,microsecond=0)
+    o,h,l,c,v=[],[],[],[],[]
+    for i,ts in enumerate(candles.get("timestamp",[])):
+        try: ct=ts_to_dt(ts)
+        except: continue
+        if ct.date()!=today or ct<cutoff: continue
+        if i<len(candles.get("close",[])):
+            o.append(candles["open"][i]); h.append(candles["high"][i])
+            l.append(candles["low"][i]);  c.append(candles["close"][i])
+            v.append(candles["volume"][i])
+    return o,h,l,c,v
+
+def compute_atr(h,l,c,period=14):
+    if len(h)<period+1: return None
+    trs=[max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,len(h))]
+    return round(sum(trs[-period:])/period,2) if len(trs)>=period else None
+
+def compute_ema(closes, period):
+    if len(closes)<period: return None
+    k=2/(period+1); ema=sum(closes[:period])/period
+    for p in closes[period:]: ema=p*k+ema*(1-k)
+    return round(ema,2)
+
+def compute_vwap(candles):
+    today=now_ist().date(); pv=vol=0
+    for i,ts in enumerate(candles.get("timestamp",[])):
+        try: ct=ts_to_dt(ts)
+        except: continue
+        if ct.date()!=today: continue
+        if i>=len(candles.get("close",[])): continue
+        hi=candles["high"][i]; lo=candles["low"][i]
+        cl=candles["close"][i]; vi=candles["volume"][i]
+        pv+=(hi+lo+cl)/3*vi; vol+=vi
+    return round(pv/vol,2) if vol>0 else None
+
+def compute_er(candles, period=10):
+    _,_,_,c,_=get_today_candles(candles,30)
+    if len(c)<6: return 0.3,"Early"
+    if len(c)<period+1: period=len(c)-1
+    recent=c[-period:]
+    net=abs(recent[-1]-recent[0])
+    total=sum(abs(recent[i]-recent[i-1]) for i in range(1,len(recent)))
+    if total==0: return 0.0,"Flat"
+    er=round(net/total,3)
+    return er,("CHOPPY" if er<CHOP_ER else "TRENDING" if er>TREND_ER else "NORMAL")
+
+def compute_adx(candles_15m, period=14):
+    """
+    ADX on 15-min candles for day classification.
+    Returns ADX value (0-100). >25 = trend, <20 = chop.
+    """
+    h=candles_15m.get("high",[]); l=candles_15m.get("low",[])
+    c=candles_15m.get("close",[])
+    if len(h)<period*2+1: return None
+    # True Range
+    trs=[max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,len(h))]
+    # Directional Movement
+    dmp=[max(h[i]-h[i-1],0) if h[i]-h[i-1]>l[i-1]-l[i] else 0 for i in range(1,len(h))]
+    dmm=[max(l[i-1]-l[i],0) if l[i-1]-l[i]>h[i]-h[i-1] else 0 for i in range(1,len(h))]
+    # Wilder smoothing
+    def wilder(data, p):
+        if len(data)<p: return []
+        result=[sum(data[:p])]
+        for i in range(p,len(data)):
+            result.append(result[-1]-result[-1]/p+data[i])
+        return result
+    atr_s=wilder(trs,period); dp_s=wilder(dmp,period); dm_s=wilder(dmm,period)
+    if not atr_s: return None
+    dx_list=[]
+    for i in range(len(atr_s)):
+        if atr_s[i]==0: continue
+        pdi=100*dp_s[i]/atr_s[i]; mdi=100*dm_s[i]/atr_s[i]
+        if pdi+mdi==0: continue
+        dx=100*abs(pdi-mdi)/(pdi+mdi)
+        dx_list.append(dx)
+    if len(dx_list)<period: return None
+    adx=sum(dx_list[-period:])/period
+    return round(adx,2)
+
+def compute_supertrend(candles_5m, period=ST_PERIOD, multiplier=ST_MULT):
+    """
+    Supertrend (10,3) on 5-min candles.
+    Returns: current signal ("BUY"/"SELL"), st_value, direction_list
+    """
+    h=candles_5m.get("high",[]); l=candles_5m.get("low",[])
+    c=candles_5m.get("close",[])
+    if len(h)<period+5: return None,None
+
+    # ATR
+    trs=[max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,len(h))]
+    atrs=[]
+    if len(trs)>=period:
+        atrs=[sum(trs[:period])/period]
+        for i in range(period,len(trs)):
+            atrs.append((atrs[-1]*(period-1)+trs[i])/period)
+
+    if not atrs: return None,None
+
+    # Supertrend
+    st=[]; direction=[]
+    offset=len(h)-len(atrs)-1
+    for i in range(len(atrs)):
+        idx=i+offset+1
+        if idx>=len(h): break
+        hl2=(h[idx]+l[idx])/2
+        upper=hl2+multiplier*atrs[i]
+        lower=hl2-multiplier*atrs[i]
+        if i==0:
+            st.append(lower if c[idx]>upper else upper)
+            direction.append("BUY" if c[idx]>st[-1] else "SELL")
+        else:
+            prev_st=st[-1]; prev_dir=direction[-1]
+            if prev_dir=="BUY":
+                new_st=max(lower,prev_st) if c[idx]>lower else upper
+            else:
+                new_st=min(upper,prev_st) if c[idx]<upper else lower
+            st.append(new_st)
+            direction.append("BUY" if c[idx]>new_st else "SELL")
+
+    if not direction: return None,None
+    return direction[-1],st[-1]
+
+def compute_pivots(ph,pl,pc):
+    p=(ph+pl+pc)/3
+    return {"pivot":round(p,2),"r1":round(2*p-pl,2),"r2":round(p+(ph-pl),2),
+            "s1":round(2*p-ph,2),"s2":round(p-(ph-pl),2)}
+
+def prev_ohlc(candles):
+    if not candles: return None
+    today=now_ist().date(); by={}
+    for i,ts in enumerate(candles.get("timestamp",[])):
+        try: d=ts_to_dt(ts).date()
+        except: continue
+        if d>=today: continue
+        if d not in by: by[d]={"h":[],"l":[],"c":[]}
+        by[d]["h"].append(candles["high"][i])
+        by[d]["l"].append(candles["low"][i])
+        by[d]["c"].append(candles["close"][i])
+    if not by: return None
+    last=max(by.keys())
+    return {"high":max(by[last]["h"]),"low":min(by[last]["l"]),"close":by[last]["c"][-1]}
+
+def compute_dte(expiry_str):
+    try: return (datetime.strptime(expiry_str,"%Y-%m-%d").date()-now_ist().date()).days
+    except: return 5
+
+def detect_gap(prev_close, spot):
+    if not prev_close or not spot: return "UNKNOWN",0.0
+    pct=(spot-prev_close)/prev_close*100
+    if pct>1.75:  return "EXTREME_GAP_UP",  round(pct,2)
+    if pct>1.00:  return "LARGE_GAP_UP",    round(pct,2)
+    if pct>0.55:  return "GAP_UP",          round(pct,2)
+    if pct<-1.75: return "EXTREME_GAP_DOWN",round(pct,2)
+    if pct<-1.00: return "LARGE_GAP_DOWN",  round(pct,2)
+    if pct<-0.55: return "GAP_DOWN",        round(pct,2)
+    return "FLAT_OPEN",round(pct,2)
+
+# ===== IV RANK =====
+def load_iv():
+    try:
+        if os.path.exists(IV_FILE):
+            with open(IV_FILE) as f: return json.load(f)
+    except: pass
+    return {}
+
+def save_iv(h):
+    try:
+        with open(IV_FILE,"w") as f: json.dump(h,f)
+    except: pass
+
+def store_eod_iv(key, atm_iv):
+    h=load_iv()
+    if key not in h: h[key]={}
+    h[key][today_str()]=round(atm_iv,2)
+    sd=sorted(h[key].keys())
+    for old in sd[:-90]: del h[key][old]
+    save_iv(h)
+
+def compute_iv_rank(key, iv):
+    d=load_iv().get(key,{})
+    if len(d)<15: return None
+    vals=list(d.values()); hi,lo=max(vals),min(vals)
+    return 50 if hi==lo else round((iv-lo)/(hi-lo)*100,1)
+
+# ===== MAX PAIN =====
+def max_pain(strikes):
+    best=None; bp=float("inf")
+    for s in strikes:
+        t=s["strike"]
+        pain=sum((t-k["strike"])*k["ce_oi"] if t>k["strike"] else
+                 (k["strike"]-t)*k["pe_oi"] if t<k["strike"] else 0 for k in strikes)
+        if pain<bp: bp=pain; best=t
+    return best
+
+# ===== ANALYZE CHAIN =====
+def analyze_chain(chain_data):
+    spot=chain_data.get("spot"); strikes=chain_data.get("strikes",[])
+    if not spot or not strikes: return None
+    atm=min(strikes,key=lambda x:abs(x["strike"]-spot))
+    top_ce=sorted(strikes,key=lambda x:x["ce_oi"],reverse=True)[:5]
+    top_pe=sorted(strikes,key=lambda x:x["pe_oi"],reverse=True)[:5]
+    tce=sum(s["ce_oi"] for s in strikes); tpe=sum(s["pe_oi"] for s in strikes)
+    return {
+        "spot":spot,"atm":atm,"top_ce_oi":top_ce,"top_pe_oi":top_pe,
+        "pcr":round(tpe/tce,2) if tce>0 else 0,
+        "max_pain":max_pain(strikes),
+        "total_ce_oi":tce,"total_pe_oi":tpe,"all_strikes":strikes,
+    }
+
+# ===== OPENING RANGE =====
+def or_reset(key):
+    today=now_ist().date()
+    with OR_L:
+        if OR_STATE["date"]!=today:
+            OR_STATE.update({"date":today,"high":None,"low":None,"ticks":0,
+                             "locked":False,"announced":False,
+                             "gap_type":"UNKNOWN","gap_pct":0.0,"gap_fixed":False})
+
+def or_track():
+    if not is_trading_day(): return
+    key,_=get_underlying(); or_reset(key)
+    with OR_L:
+        if OR_STATE["locked"]: return
+    ltp=neo_spot(key)
+    if ltp is None: return
+    with OR_L:
+        OR_STATE["high"]=max(OR_STATE["high"] or ltp,ltp)
+        OR_STATE["low"]=min(OR_STATE["low"] or ltp,ltp)
+        OR_STATE["ticks"]=(OR_STATE["ticks"] or 0)+1
+
+def or_lock():
+    if not is_trading_day(): return
+    key,u=get_underlying(); or_reset(key)
+    with OR_L:
+        if OR_STATE["locked"] and OR_STATE["announced"]: return
+        if OR_STATE["high"] is None:
+            tg("⚠️ <b>OR Lock Delayed</b>\nRetrying in 15s")
+            threading.Timer(15,or_lock).start(); return
+        OR_STATE["locked"]=True; OR_STATE["announced"]=True
+        oh,ol=OR_STATE["high"],OR_STATE["low"]
+
+    candles=neo_candles(key,5,5)
+    atr_val=None; ratio=None
+    if candles:
+        atr_val=compute_atr(candles["high"],candles["low"],candles["close"])
+        if atr_val: ratio=round((oh-ol)/atr_val,2)
+
+    prev=prev_ohlc(candles)
+    if prev:
+        gap_type,gap_pct=detect_gap(prev["close"],(oh+ol)/2)
+        with OR_L: OR_STATE["gap_type"]=gap_type; OR_STATE["gap_pct"]=gap_pct; OR_STATE["gap_fixed"]=True
+        with DAY_L: DAY_STATE["gap_pct"]=abs(gap_pct)
+    else:
+        gap_type,gap_pct="UNKNOWN",0.0
+
+    # Store OR ratio for day classification
+    if ratio:
+        with DAY_L: DAY_STATE["or_ratio"]=ratio
+
+    hint=""
+    if ratio:
+        if ratio<CHOP_OR:   hint="🔻 COMPRESSED — lean SELL"
+        elif ratio>TREND_OR: hint="🔥 WIDE — lean SCALP"
+        else:               hint="✅ NORMAL"
+
+    gap_str=f"\nGap: {gap_type.replace('_',' ')} ({gap_pct:+.2f}%)" if gap_type not in ["FLAT_OPEN","UNKNOWN"] else ""
+    tg(
+        f"📊 <b>OR LOCKED — {u['name']}</b>\n09:30 IST | {today_str()}\n\n"
+        f"High: {oh:,.2f} | Low: {ol:,.2f}\n"
+        f"Range: {oh-ol:.1f} pts | Ticks: {OR_STATE['ticks']}\n"
+        f"{'ATR: '+str(atr_val)+' | R/ATR: '+str(ratio)+' → '+hint if atr_val else ''}"
+        f"{gap_str}"
+        f"{chr(10)+'⚡ EXPIRY DAY — exit 2:30 PM' if is_expiry(key) else ''}\n\n"
+        f"<i>Classifying at 9:45 (tentative) and 10:30 (final)</i>"
+    )
+
+# ===== DAY CLASSIFICATION =====
+def classify_day(candles_5m, candles_15m, spot, atr):
+    """
+    Returns (mode, trend_score, chop_score, details)
+    mode: SCALP / SELL / NO_TRADE
+    """
+    details={}
+    trend_pts=0; chop_pts=0
+
+    # 1. ER (5-min)
+    er,_=compute_er(candles_5m)
+    details["er"]=er
+    if er>TREND_ER:   trend_pts+=1
+    elif er<CHOP_ER:  chop_pts+=1
+
+    # 2. ADX (15-min)
+    adx=compute_adx(candles_15m)
+    details["adx"]=adx
+    if adx:
+        if adx>TREND_ADX:  trend_pts+=1
+        elif adx<CHOP_ADX: chop_pts+=1
+
+    # 3. OR width
+    with OR_L:
+        or_ratio=DAY_STATE.get("or_ratio")
+    details["or_ratio"]=or_ratio
+    if or_ratio:
+        if or_ratio>TREND_OR:  trend_pts+=1
+        elif or_ratio<CHOP_OR: chop_pts+=1
+
+    # 4. Gap
+    with DAY_L: gap_pct=DAY_STATE.get("gap_pct",0)
+    details["gap_pct"]=gap_pct
+    if gap_pct>TREND_GAP:  trend_pts+=1
+    elif gap_pct<CHOP_GAP: chop_pts+=1
+
+    # 5. VWAP direction
+    vwap=compute_vwap(candles_5m)
+    vwap_dir=None
+    if vwap and spot:
+        diff=abs(spot-vwap)/spot*100
+        if diff>0.3:
+            vwap_dir="DIRECTIONAL"; trend_pts+=1
+        elif diff<0.15:
+            vwap_dir="OSCILLATING"; chop_pts+=1
+        else:
+            vwap_dir="NEUTRAL"
+    details["vwap_dir"]=vwap_dir; details["vwap"]=vwap
+
+    # Classify
+    if trend_pts>=4:   mode="SCALP"
+    elif chop_pts>=4:  mode="SELL"
+    else:              mode="NO_TRADE"
+
+    # Update state
+    with DAY_L:
+        DAY_STATE["er"]=er; DAY_STATE["adx"]=adx
+        DAY_STATE["vwap_dir"]=vwap_dir
+        DAY_STATE["trend_score"]=trend_pts
+        DAY_STATE["chop_score"]=chop_pts
+
+    return mode,trend_pts,chop_pts,details
+
+def lock_day_mode(mode, trend_pts, chop_pts, details, is_final=True):
+    with DAY_L:
+        if is_final: DAY_STATE["mode_locked"]=True
+        DAY_STATE["mode"]=mode
+
+    label="FINAL" if is_final else "TENTATIVE"
+    er=details.get("er",0); adx=details.get("adx","N/A")
+    or_r=details.get("or_ratio","N/A"); gap=details.get("gap_pct",0)
+    vwap_d=details.get("vwap_dir","N/A")
+
+    if mode=="SCALP":
+        icon="⚡"; desc="SCALP MODE — directional scalping active"
+    elif mode=="SELL":
+        icon="📉"; desc="SELL MODE — spread selling active from 10:30 AM"
+    else:
+        icon="💰"; desc="NO TRADE — mixed signals, staying in cash"
+
+    tg(
+        f"{icon} <b>DAY CLASSIFICATION [{label}]</b>\n\n"
+        f"<b>MODE: {mode}</b>\n{desc}\n\n"
+        f"Score: {trend_pts}/5 TREND | {chop_pts}/5 CHOP\n\n"
+        f"ER: {er:.3f} {'✅T' if er>TREND_ER else '✅C' if er<CHOP_ER else '–'}\n"
+        f"ADX: {adx} {'✅T' if adx and adx>TREND_ADX else '✅C' if adx and adx<CHOP_ADX else '–'}\n"
+        f"OR R/ATR: {or_r} {'✅T' if or_r and or_r>TREND_OR else '✅C' if or_r and or_r<CHOP_OR else '–'}\n"
+        f"Gap: {gap:.2f}% {'✅T' if gap>TREND_GAP else '✅C' if gap<CHOP_GAP else '–'}\n"
+        f"VWAP: {vwap_d} {'✅T' if vwap_d=='DIRECTIONAL' else '✅C' if vwap_d=='OSCILLATING' else '–'}\n"
+        f"\n<i>v5.0 | {'📝 PAPER' if PAPER else '🔴 LIVE'}</i>"
+    )
+
+# ===== SNAPSHOT =====
+def build_snapshot(key=None):
+    if not API_L.acquire(timeout=45): return {"error":"API busy"}
+    try:
+        n=now_ist()
+        if n.hour==9 and n.minute<15: return {"error":"Pre-open"}
+        if key is None: key,u=get_underlying()
+        else: u=UNDERLYINGS[key]
+        if not neo(): return {"error":"Not connected — send /login"}
+
+        expiries=neo_expiries(key)
+        if not expiries: return {"error":f"{u['name']} expiry: No data"}
+        nearest=expiries[0]; dte=compute_dte(nearest)
+
+        time.sleep(2.0)
+        chain=neo_option_chain(key,nearest)
+        if not chain: return {"error":f"{u['name']} chain failed"}
+
+        analysis=analyze_chain(chain)
+        if not analysis: return {"error":"Chain parse failed"}
+
+        candles5=neo_candles(key,5,5)
+        candles15=neo_candles(key,15,10)
+        atr_val=None
+        if candles5:
+            atr_val=compute_atr(candles5["high"],candles5["low"],candles5["close"])
+
+        prev=prev_ohlc(candles5)
+        pivots=compute_pivots(prev["high"],prev["low"],prev["close"]) if prev else None
+
+        with OR_L:
+            gap_type=OR_STATE["gap_type"] if OR_STATE["gap_fixed"] else "UNKNOWN"
+            gap_pct=OR_STATE["gap_pct"] if OR_STATE["gap_fixed"] else 0.0
+        if gap_type=="UNKNOWN" and prev:
+            gap_type,gap_pct=detect_gap(prev["close"],analysis["spot"])
+
+        atm=analysis["atm"]
+        atm_iv=(atm.get("ce_iv",0)+atm.get("pe_iv",0))/2
+        iv_rank=compute_iv_rank(key,atm_iv)
+
+        # Supertrend on 5-min
+        st_signal,st_val=None,None
+        if candles5:
+            st_signal,st_val=compute_supertrend(candles5)
+
+        return {
+            "analysis":analysis,"expiry":nearest,"dte":dte,"atr":atr_val,
+            "pivots":pivots,"candles5":candles5,"candles15":candles15,
+            "underlying_key":key,"underlying_name":u["name"],
+            "lot_size":u["lot_size"],"strike_gap":u["strike_gap"],
+            "scalp_qty":u["scalp_qty"],"sell_qty":u["sell_qty"],
+            "gap_type":gap_type,"gap_pct":gap_pct,
+            "is_expiry_day":is_expiry(key),
+            "atm_iv":round(atm_iv,2),"iv_rank":iv_rank,
+            "st_signal":st_signal,"st_val":st_val,
+        }
+    finally:
+        API_L.release()
+
+# ===== OI FLOW =====
+def compute_oi_flow(analysis, atr, key):
+    if not analysis: return 0,[],False
+    spot=analysis["spot"]; strikes=analysis["all_strikes"]
+    atr_val=atr if atr else 25
+    _,oi_sig,oi_strong=oi_thresh(key)
+    flow=0; signals=[]; reversal=False
+    with REG_L:
+        prev_pcr=REGIME.get("pcr"); prev_ce=REGIME.get("top_ce")
+        prev_pe=REGIME.get("top_pe"); prev_ce_m=REGIME.get("ce_mult",0)
+        prev_pe_m=REGIME.get("pe_mult",0)
+    atm_s=[s for s in strikes if abs(s["strike"]-spot)<=atr_val*1.5]
+    ce_b=ce_u=pe_b=pe_u=0
+    for s in atm_s:
+        cc=s["ce_oi_change"]; pc=s["pe_oi_change"]
+        if cc>oi_sig:    ce_b+=cc
+        elif cc<-oi_sig: ce_u+=abs(cc)
+        if pc>oi_sig:    pe_b+=pc
+        elif pc<-oi_sig: pe_u+=abs(pc)
+    if ce_u>ce_b and ce_u>oi_sig:
+        pts=min(35,int(ce_u/oi_sig)*8); flow+=pts
+        signals.append(f"Call covering ({ce_u:,.0f}) +{pts}")
+        if ce_u>oi_strong: reversal=True
+    elif ce_b>ce_u and ce_b>oi_sig:
+        pts=min(35,int(ce_b/oi_sig)*8); flow-=pts
+        signals.append(f"Call build ({ce_b:,.0f}) -{pts}")
+        if ce_b>oi_strong: reversal=True
+    if pe_b>oi_sig:
+        pts=min(20,int(pe_b/oi_sig)*5); flow-=pts
+        signals.append(f"Put build ({pe_b:,.0f}) -{pts}")
+        if pe_b>oi_strong: reversal=True
+    elif pe_u>oi_sig:
+        pts=min(20,int(pe_u/oi_sig)*5); flow+=pts
+        signals.append(f"Put covering ({pe_u:,.0f}) +{pts}")
+        if pe_u>oi_strong: reversal=True
+    pcr=analysis["pcr"]
+    if prev_pcr is not None:
+        chg=pcr-prev_pcr
+        if chg>0.15:
+            pts=15 if chg>0.3 else 8; flow+=pts
+            signals.append(f"PCR rising ({prev_pcr:.2f}→{pcr:.2f}) +{pts}")
+            if chg>0.30: reversal=True
+        elif chg<-0.15:
+            pts=15 if chg<-0.3 else 8; flow-=pts
+            signals.append(f"PCR falling ({prev_pcr:.2f}→{pcr:.2f}) -{pts}")
+            if chg<-0.30: reversal=True
+        else: signals.append(f"PCR stable ({prev_pcr:.2f}→{pcr:.2f})")
+    else: signals.append(f"PCR: {pcr}")
+    all_ce_v=[s["ce_volume"] for s in strikes if s["ce_volume"]>0]
+    all_pe_v=[s["pe_volume"] for s in strikes if s["pe_volume"]>0]
+    avg_ce=sum(all_ce_v)/len(all_ce_v) if all_ce_v else 1
+    avg_pe=sum(all_pe_v)/len(all_pe_v) if all_pe_v else 1
+    otm_ce=[s for s in strikes if spot+atr_val*0.5<s["strike"]<spot+atr_val*3]
+    otm_pe=[s for s in strikes if spot-atr_val*3<s["strike"]<spot-atr_val*0.5]
+    curr_ce_m=0
+    surge_ce=[s for s in otm_ce if s["ce_volume"]>avg_ce*4]
+    if surge_ce:
+        top=max(surge_ce,key=lambda x:x["ce_volume"]); curr_ce_m=top["ce_volume"]/avg_ce
+        pts=min(20,int(curr_ce_m/2)*5); flow+=pts
+        signals.append(f"Call surge {top['strike']:,.0f} ({curr_ce_m:.1f}x) +{pts}")
+        if curr_ce_m>5 and prev_ce_m<2: reversal=True
+    curr_pe_m=0
+    surge_pe=[s for s in otm_pe if s["pe_volume"]>avg_pe*4]
+    if surge_pe:
+        top=max(surge_pe,key=lambda x:x["pe_volume"]); curr_pe_m=top["pe_volume"]/avg_pe
+        pts=min(20,int(curr_pe_m/2)*5); flow-=pts
+        signals.append(f"Put surge {top['strike']:,.0f} ({curr_pe_m:.1f}x) -{pts}")
+        if curr_pe_m>5 and prev_pe_m<2: reversal=True
+    if not surge_ce and not surge_pe: signals.append("No unusual volume")
+    top_ce=analysis["top_ce_oi"][0]["strike"] if analysis["top_ce_oi"] else None
+    top_pe=analysis["top_pe_oi"][0]["strike"] if analysis["top_pe_oi"] else None
+    wall=False
+    if top_ce and prev_ce and spot>=top_ce and prev_ce>spot-atr_val:
+        flow+=30; reversal=True; wall=True; signals.append(f"🧱 CALL WALL BROKEN {top_ce:,.0f}")
+    if top_pe and prev_pe and not wall and spot<=top_pe and prev_pe<spot+atr_val:
+        flow-=30; reversal=True; signals.append(f"🧱 PUT WALL BROKEN {top_pe:,.0f}")
+    flow=max(-100,min(100,flow))
+    with REG_L: REGIME["ce_mult"]=curr_ce_m; REGIME["pe_mult"]=curr_pe_m
+    return flow,signals,reversal
+
+# ===== L2 GATE =====
+def l2_check(strike_data, direction):
+    """
+    Hard gate. Returns True only if L2 confirms entry direction.
+    direction: "CALL" or "PUT"
+    """
+    bid_qty=strike_data.get("ce_bid_qty",0) if direction=="CALL" else strike_data.get("pe_ask_qty",0)
+    ask_qty=strike_data.get("ce_ask_qty",0) if direction=="CALL" else strike_data.get("pe_bid_qty",0)
+
+    if bid_qty==0 or ask_qty==0:
+        print(f"[L2] No depth data — skipping L2 gate"); return True  # pass if no data
+
+    if direction=="CALL":
+        ratio=bid_qty/ask_qty
+        passes=ratio>=L2_RATIO_CALL
+        print(f"[L2] CALL bid/ask={ratio:.2f} → {'✅ PASS' if passes else '❌ FAIL'}")
+    else:
+        ratio=ask_qty/bid_qty
+        passes=ratio>=L2_RATIO_PUT
+        print(f"[L2] PUT ask/bid={ratio:.2f} → {'✅ PASS' if passes else '❌ FAIL'}")
+    return passes
+
+# ===== PIVOT CONFLUENCE =====
+def pivot_confluence(spot, pivots, atr_val, direction, analysis):
+    """
+    Returns True if price is near a pivot level that confirms direction.
+    direction: "CALL" (bullish) or "PUT" (bearish)
+    """
+    if not pivots or not atr_val: return False
+    proximity=atr_val*0.3
+
+    if direction=="CALL":
+        # Bullish: price bouncing off S1/S2 or above pivot
+        near_s1=abs(spot-pivots["s1"])<proximity
+        near_pivot=abs(spot-pivots["pivot"])<proximity and spot>pivots["s1"]
+        above_r1=spot>pivots["r1"]
+        return near_s1 or near_pivot or above_r1
+    else:
+        # Bearish: price rejected at R1/R2 or below pivot
+        near_r1=abs(spot-pivots["r1"])<proximity
+        near_pivot=abs(spot-pivots["pivot"])<proximity and spot<pivots["r1"]
+        below_s1=spot<pivots["s1"]
+        return near_r1 or near_pivot or below_s1
+
+# ===== OR BREAKOUT CHECK =====
+def or_breakout_check(spot, candles5, direction):
+    """
+    Returns True if price has broken OR in the right direction with volume.
+    direction: "CALL" (need break above OR high) or "PUT" (need break below OR low)
+    """
+    with OR_L:
+        if not OR_STATE["locked"]: return False
+        or_high=OR_STATE["high"]; or_low=OR_STATE["low"]
+
+    _,_,_,c,v=get_today_candles(candles5,30)
+    if not v: return False
+
+    avg_vol=sum(v)/len(v) if v else 1
+    last_vol=v[-1] if v else 0
+    vol_surge=last_vol>avg_vol*2
+
+    if direction=="CALL":
+        return spot>or_high and vol_surge
+    else:
+        return spot<or_low and vol_surge
+
+# ===== SCALP SIGNAL =====
+def check_scalp_signal(snap):
+    """
+    Returns (direction, score, reasons) or (None, 0, [])
+    Needs 4/5 triggers. L2 is mandatory.
+    """
+    analysis=snap["analysis"]; spot=analysis["spot"]
+    atr=snap.get("atr",25); pivots=snap.get("pivots")
+    candles5=snap.get("candles5",{}); key=snap.get("underlying_key","nifty")
+    st_signal=snap.get("st_signal")
+
+    flow_score,flow_sigs,reversal=compute_oi_flow(analysis,atr,key)
+
+    # Determine direction from ST + flow
+    if st_signal=="BUY" and flow_score>0:   direction="CALL"
+    elif st_signal=="SELL" and flow_score<0: direction="PUT"
+    elif st_signal=="BUY":                  direction="CALL"
+    elif st_signal=="SELL":                 direction="PUT"
+    elif flow_score>20:                     direction="CALL"
+    elif flow_score<-20:                    direction="PUT"
+    else: return None,0,["No clear direction"]
+
+    triggers_passed=0; reasons=[]; trigger_details=[]
+
+    # T1: Supertrend
+    if st_signal:
+        st_ok=(st_signal=="BUY" and direction=="CALL") or (st_signal=="SELL" and direction=="PUT")
+        if st_ok: triggers_passed+=1; trigger_details.append("✅ ST")
+        else: trigger_details.append("❌ ST")
+    else: trigger_details.append("⚠️ ST (no data)")
+
+    # T2: Pivot confluence
+    atm=analysis["atm"]
+    strikes=analysis["all_strikes"]
+    sorted_strikes=sorted(strikes,key=lambda x:x["strike"])
+    if pivot_confluence(spot,pivots,atr,direction,analysis):
+        triggers_passed+=1; trigger_details.append("✅ Pivot")
+    else: trigger_details.append("❌ Pivot")
+
+    # T3: OR breakout
+    if or_breakout_check(spot,candles5,direction):
+        triggers_passed+=1; trigger_details.append("✅ OR Break")
+    else: trigger_details.append("❌ OR Break")
+
+    # T4: VWAP + EMA alignment
+    _,_,_,c,_=get_today_candles(candles5,30)
+    vwap=compute_vwap(candles5)
+    ema9=compute_ema(c,9) if len(c)>=9 else None
+    ema20=compute_ema(c,20) if len(c)>=20 else None
+    vwap_ok=False
+    if direction=="CALL":
+        vwap_ok=bool(vwap and spot>vwap and (ema9 is None or spot>ema9))
+    else:
+        vwap_ok=bool(vwap and spot<vwap and (ema9 is None or spot<ema9))
+    if vwap_ok: triggers_passed+=1; trigger_details.append("✅ VWAP/EMA")
+    else: trigger_details.append("❌ VWAP/EMA")
+
+    # T5: L2 HARD GATE
+    if direction=="CALL":
+        atm_strike=min(sorted_strikes,key=lambda x:abs(x["strike"]-spot))
+        l2_ok=l2_check(atm_strike,"CALL")
+    else:
+        atm_strike=min(sorted_strikes,key=lambda x:abs(x["strike"]-spot))
+        l2_ok=l2_check(atm_strike,"PUT")
+
+    if l2_ok: trigger_details.append("✅ L2")
+    else: trigger_details.append("❌ L2 (HARD FAIL)"); return None,0,["L2 hard gate failed — sellers in control"]
+
+    score=triggers_passed  # out of 4 (L2 is mandatory, not scored)
+    reasons=trigger_details
+    reasons.append(f"OI flow: {flow_score:+d}")
+    if reversal: reasons.append("⚡ OI Reversal detected")
+
+    if triggers_passed>=3:  # L2 passed + 3 of 4 others
+        return direction, score, reasons
+    else:
+        return None, score, reasons+[f"Only {triggers_passed}/4 triggers (need 3+)"]
+
+# ===== SELL SIGNAL =====
+def check_sell_signal(snap):
+    """Check if conditions are right for spread selling."""
+    n=now_ist()
+    if n.hour<SELL_START_HOUR or (n.hour==SELL_START_HOUR and n.minute<SELL_START_MIN):
+        return False,"Before 10:30 AM"
+
+    with DAY_L:
+        mode=DAY_STATE.get("mode")
+        chop_score=DAY_STATE.get("chop_score",0)
+    if mode!="SELL": return False,f"Day mode is {mode} not SELL"
+
+    analysis=snap["analysis"]; atr=snap.get("atr"); dte=snap.get("dte",5)
+    iv_rank=snap.get("iv_rank")
+
+    if dte<SELL_MIN_DTE or dte>SELL_MAX_DTE:
+        return False,f"DTE {dte} outside range {SELL_MIN_DTE}-{SELL_MAX_DTE}"
+
+    flow_score,_,_=compute_oi_flow(analysis,atr,snap.get("underlying_key","nifty"))
+
+    # Compute sell score
+    score=0
+    if chop_score>=4: score+=30
+    er=DAY_STATE.get("er",0.5)
+    adx=DAY_STATE.get("adx",25)
+    if er<CHOP_ER: score+=20
+    if adx and adx<CHOP_ADX: score+=20
+    if iv_rank and iv_rank>45: score+=15
+    if abs(flow_score)<30: score+=15  # flow not extreme = safer to sell
+
+    if score>=SELL_MIN_SCORE:
+        return True,f"Score {score}/100 | DTE {dte} | IV Rank {iv_rank}"
+    return False,f"Score {score} < {SELL_MIN_SCORE}"
+
+# ===== SIGNAL FIRE =====
+def can_fire(mode):
+    reset_daily()
+    with RISK_L:
+        if mode=="BUY" and RISK["scalps"]>=MAX_SCALPS: return False,"Max scalps reached"
+        elif mode=="SELL" and RISK["sells"]>=MAX_SELLS: return False,"Max sells reached"
+    now=now_ist()
+    with LAST_L:
+        lt=LAST_SIG["time"]; lm=LAST_SIG["mode"]
+    if lt and lm==mode and (now-lt).total_seconds()<SIGNAL_DEDUP:
+        return False,"Dedup window"
+    return True,""
+
+def record_signal(mode):
+    with LAST_L: LAST_SIG["time"]=now_ist(); LAST_SIG["mode"]=mode
+    with RISK_L:
+        if mode=="BUY": RISK["scalps"]+=1
+        else: RISK["sells"]+=1
+
+# ===== FORMAT + FIRE SCALP =====
+def fire_scalp(snap, direction):
+    allowed,reason=is_allowed()
+    if not allowed and not PAPER: return False
+
+    analysis=snap["analysis"]; spot=analysis["spot"]
+    strikes=sorted(analysis["all_strikes"],key=lambda x:x["strike"])
+    key=snap.get("underlying_key","nifty"); u=UNDERLYINGS[key]
+    expiry=snap.get("expiry","N/A"); dte=snap.get("dte",5)
+    qty=u["scalp_qty"]
+    is_paper=PAPER or not allowed
+
+    if direction=="CALL":
+        atm=min([s for s in strikes if s["ce_ltp"]>SCALP_PREMIUM_MIN],
+                key=lambda x:abs(x["strike"]-spot),default=None)
+        if not atm: return False
+        prem=atm["ce_ltp"]; tsym=atm.get("ce_tsym","")
+        strike=atm["strike"]; side="ce"
+        strategy="BUY CALL"
+    else:
+        atm=min([s for s in strikes if s["pe_ltp"]>SCALP_PREMIUM_MIN],
+                key=lambda x:abs(x["strike"]-spot),default=None)
+        if not atm: return False
+        prem=atm["pe_ltp"]; tsym=atm.get("pe_tsym","")
+        strike=atm["strike"]; side="pe"
+        strategy="BUY PUT"
+
+    if prem>SCALP_PREMIUM_MAX:
+        print(f"[Scalp] Premium {prem} too wide for scalp"); return False
+
+    sl_price=round(prem-SCALP_SL_PTS,2); tgt_price=round(prem+SCALP_TGT_PTS,2)
+    t1=round(prem+SCALP_TGT_PTS*0.5,2)   # 50% of target → move SL to breakeven
+    t2=round(prem+SCALP_TGT_PTS*0.8,2)   # 80% of target → lock partial profit
+    t2_sl=round(prem+SCALP_TGT_PTS*0.4,2)
+
+    win=round((tgt_price-prem)*qty,0); loss=round((prem-sl_price)*qty,0)
+    paper_prefix="📝 <b>PAPER</b> — " if is_paper else "🔴 <b>LIVE</b> — "
+
+    with RISK_L: realized=RISK["pnl"]
+
+    # ST signal for context
+    st=snap.get("st_signal","?")
+
+    msg=(
+        f"⚡ {paper_prefix}<b>{u['name']} {strategy}</b>\n"
+        f"DTE: {dte} | Spot: {spot:,.2f}\n"
+        f"ST: {'🟢' if st=='BUY' else '🔴'} {st} | Scalp qty: {qty}\n\n"
+        f"<b>═══ ENTRY ═══</b>\n"
+        f"Strike: {strike:,.0f} | Entry: ₹{prem:.2f}\n"
+        f"SL: ₹{sl_price:.2f} (-₹{SCALP_SL_PTS}) | Target: ₹{tgt_price:.2f} (+₹{SCALP_TGT_PTS})\n"
+        f"Win: +₹{win:,.0f} | Loss: -₹{loss:,.0f} | R:R 1:1.5\n"
+    )
+    if is_paper and tsym: msg+=f"<i>Symbol: {tsym}</i>\n"
+    msg+=(
+        f"\n<b>Trails (tight — book fast):</b>\n"
+        f"T1 @ ₹{t1:.2f} (+50%) → SL to breakeven\n"
+        f"T2 @ ₹{t2:.2f} (+80%) → SL to ₹{t2_sl:.2f}\n"
+        f"⏰ Time stop: {SCALP_TIME_STOP} min\n"
+        f"\n<b>Daily: {'+'if realized>=0 else ''}₹{realized:,.0f} / ₹{DAILY_TARGET:,.0f}</b>\n"
+        f"\n<i>{'📝 PAPER' if is_paper else '🔴 LIVE'} | v5.0</i>"
+    )
+
+    if tg(msg):
+        record_signal("BUY")
+        with TRADE_L:
+            TRADE.update({"active":True,"is_buy":True,"strategy":strategy,
+                "buy_strike":strike,"buy_side":side,
+                "buy_entry":prem,"buy_tgt":tgt_price,"buy_sl":sl_price,
+                "l1_trig":t1,"l1_sl":prem,"l2_trig":t2,"l2_sl":t2_sl,
+                "entry_time":now_ist(),"qty":qty,"lots":SCALP_LOTS,
+                "key":key,"expiry":expiry,"l1_done":False,"l2_done":False})
+        print(f"[Signal] Scalp fired — {strategy} {strike} @ ₹{prem}")
+        return True
+    return False
+
+# ===== FORMAT + FIRE SELL =====
+def fire_sell(snap, reason):
+    allowed,_=is_allowed()
+    if not allowed and not PAPER: return False
+
+    analysis=snap["analysis"]; spot=analysis["spot"]
+    strikes=sorted(analysis["all_strikes"],key=lambda x:x["strike"])
+    key=snap.get("underlying_key","nifty"); u=UNDERLYINGS[key]
+    expiry=snap.get("expiry","N/A"); dte=snap.get("dte",5)
+    qty=u["sell_qty"]; sg=u["strike_gap"]
+    is_paper=PAPER or not allowed
+
+    flow_score,_,_=compute_oi_flow(analysis,snap.get("atr"),key)
+
+    # Select spread type based on bias
+    if flow_score>20:    spread_type="BULL_PUT"
+    elif flow_score<-20: spread_type="BEAR_CALL"
+    else:                spread_type="IC"
+
+    def find_delta(target, side="ce"):
+        cands=[s for s in strikes if 25<s[f"{side}_ltp"]<700]
+        if not cands: cands=[s for s in strikes if s[f"{side}_ltp"]>10]
+        return min(cands,key=lambda x:abs(abs(x.get(f"{side}_delta",0))-target),default=None) if cands else None
+
+    def find_offset(base,offset,side="ce"):
+        ts=base+offset*sg
+        cands=[s for s in strikes if s[f"{side}_ltp"]>0]
+        return min(cands,key=lambda x:abs(x["strike"]-ts),default=None) if cands else None
+
+    delta=0.22 if dte<=3 else 0.26
+    width=2
+
+    if spread_type=="BULL_PUT":
+        ps=find_delta(delta,"pe")
+        if not ps: return False
+        ph=find_offset(ps["strike"],-width,"pe")
+        if not ph: return False
+        net=ps["pe_ltp"]-ph["pe_ltp"]
+        if net<=0: return False
+        max_loss=abs(ps["strike"]-ph["strike"])-net
+        strategy="BULL PUT SPREAD"
+        short_strike=ps["strike"]; short_side="pe"
+        order_msg=(f"BUY  {ph['strike']:,.0f} Put @ ₹{ph['pe_ltp']:.2f} × {qty}\n"
+                   f"SELL {ps['strike']:,.0f} Put @ ₹{ps['pe_ltp']:.2f} × {qty}\n")
+        if is_paper: order_msg+=f"<i>Sell: {ps.get('pe_tsym','')} | Buy: {ph.get('pe_tsym','')}</i>\n"
+
+    elif spread_type=="BEAR_CALL":
+        cs=find_delta(delta,"ce")
+        if not cs: return False
+        ch=find_offset(cs["strike"],width,"ce")
+        if not ch: return False
+        net=cs["ce_ltp"]-ch["ce_ltp"]
+        if net<=0: return False
+        max_loss=abs(ch["strike"]-cs["strike"])-net
+        strategy="BEAR CALL SPREAD"
+        short_strike=cs["strike"]; short_side="ce"
+        order_msg=(f"BUY  {ch['strike']:,.0f} Call @ ₹{ch['ce_ltp']:.2f} × {qty}\n"
+                   f"SELL {cs['strike']:,.0f} Call @ ₹{cs['ce_ltp']:.2f} × {qty}\n")
+        if is_paper: order_msg+=f"<i>Sell: {cs.get('ce_tsym','')} | Buy: {ch.get('ce_tsym','')}</i>\n"
+
+    else:  # IC
+        cs=find_delta(delta,"ce"); ps=find_delta(delta,"pe")
+        if not cs or not ps: return False
+        ch=find_offset(cs["strike"],width,"ce"); ph=find_offset(ps["strike"],-width,"pe")
+        if not ch or not ph: return False
+        net=cs["ce_ltp"]+ps["pe_ltp"]-ch["ce_ltp"]-ph["pe_ltp"]
+        if net<=0: return False
+        max_loss=abs(ch["strike"]-cs["strike"])-net
+        strategy="IRON CONDOR"
+        short_strike=cs["strike"]; short_side="ce"
+        order_msg=(f"BUY  {ch['strike']:,.0f} Call @ ₹{ch['ce_ltp']:.2f} × {qty}\n"
+                   f"BUY  {ph['strike']:,.0f} Put  @ ₹{ph['pe_ltp']:.2f} × {qty}\n"
+                   f"SELL {cs['strike']:,.0f} Call @ ₹{cs['ce_ltp']:.2f} × {qty}\n"
+                   f"SELL {ps['strike']:,.0f} Put  @ ₹{ps['pe_ltp']:.2f} × {qty}\n")
+
+    total_credit=round(net*qty,0)
+    sl_credit=round(net*SELL_SL_MULT,2)
+    target_credit=round(net*SELL_TARGET_PCT,2)
+    target_total=round(target_credit*qty,0)
+    sl_total=round(sl_credit*qty,0)
+    eff=round(net/(net+max_loss)*100,1)
+
+    with RISK_L: realized=RISK["pnl"]
+    paper_prefix="📝 <b>PAPER</b> — " if is_paper else "🔴 <b>LIVE</b> — "
+
+    msg=(
+        f"📉 {paper_prefix}<b>{u['name']} {strategy}</b>\n"
+        f"DTE: {dte} | Spot: {spot:,.2f} | {reason}\n\n"
+        f"<b>{eff}% credit | {100-eff:.0f}% risk | {width*sg:.0f}pts wide</b>\n\n"
+        f"<b>═══ ORDER (Hedges FIRST) ═══</b>\n"
+        f"{order_msg}\n"
+        f"<b>Credit: ₹{net:.2f}/lot | Total: ₹{total_credit:,.0f}</b>\n"
+        f"Target (50%): ₹{target_total:,.0f}\n"
+        f"SL (1.5×): ₹{sl_total:,.0f}\n"
+        f"Hard exit: 2:30 PM\n"
+        f"\n<b>Daily: {'+'if realized>=0 else ''}₹{realized:,.0f} / ₹{DAILY_TARGET:,.0f}</b>\n"
+        f"\n<i>{'📝 PAPER' if is_paper else '🔴 LIVE'} | v5.0</i>"
+    )
+
+    if tg(msg):
+        record_signal("SELL")
+        with TRADE_L:
+            TRADE.update({"active":True,"is_buy":False,"strategy":strategy,
+                "short_strike":short_strike,"short_side":short_side,
+                "entry_short":net,"net_credit":net,
+                "tgt_pct":SELL_TARGET_PCT,"sl_mult":SELL_SL_MULT,
+                "entry_time":now_ist(),"lots":SELL_LOTS,"qty":qty,
+                "key":key,"expiry":expiry})
+        print(f"[Signal] Sell fired — {strategy} @ ₹{net:.2f} credit")
+        return True
+    return False
+
+# ===== TRADE MONITOR =====
+def monitor_trade():
+    with TRADE_L:
+        if not TRADE["active"]: return
+        is_buy=TRADE["is_buy"]; key=TRADE["key"]
+        entry_time=TRADE["entry_time"]
+    if not is_trading_day(): return
+    n=now_ist()
+    if n<n.replace(hour=9,minute=30) or n>=n.replace(hour=15,minute=0): return
+
+    # Hard exit sells at 2:30 PM
+    if not is_buy and n.hour>=SELL_HARD_EXIT[0] and n.minute>=SELL_HARD_EXIT[1]:
+        with TRADE_L: TRADE["active"]=False
+        tg(f"⏰ <b>SELL HARD EXIT 2:30 PM</b>\nClose all spread legs now.\n→ /tradesquared")
+        return
+
+    snap=build_snapshot(key)
+    if "error" in snap: return
+    strikes=snap["analysis"]["all_strikes"]; spot=snap["analysis"]["spot"]
+    elapsed=int((n-entry_time).total_seconds()/60)
+    if is_buy: monitor_buy(strikes,elapsed)
+    else: monitor_sell(strikes,spot,elapsed)
+
+def monitor_sell(strikes,spot,elapsed):
+    with TRADE_L:
+        ss=TRADE["short_strike"]; sd=TRADE["short_side"]
+        ep=TRADE["entry_short"]; nc=TRADE["net_credit"]
+        tp=TRADE["tgt_pct"]; sm=TRADE["sl_mult"]
+        qty=TRADE["qty"]; strategy=TRADE["strategy"]
+    match=next((s for s in strikes if s["strike"]==ss),None)
+    if not match: return
+    current=match.get(f"{sd}_ltp",0)
+    if not current or current<=0: return
+    decay=ep-current; captured=decay/nc if nc>0 else 0
+    pnl=round(decay*qty,0)
+    if captured>=tp:
+        tg(f"🎯 <b>SELL TARGET HIT — EXIT NOW</b>\n{strategy}\n"
+           f"Credit ₹{ep:.2f} → ₹{current:.2f} | {captured:.0%} captured\n"
+           f"<b>+₹{pnl:,.0f}</b>\n→ /tradesquared")
+        register_profit(pnl,"sell")
+        with TRADE_L: TRADE["active"]=False; return
+    if current>=ep*sm:
+        loss=round((current-ep)*qty,0)
+        tg(f"🛑 <b>SELL SL HIT — EXIT NOW</b>\n{strategy}\n"
+           f"₹{ep:.2f} → ₹{current:.2f}\n<b>-₹{loss:,.0f}</b>\n→ /sl")
+        with TRADE_L: TRADE["active"]=False
+        register_sl("sell",loss); return
+    if elapsed>0 and elapsed%30==0:
+        tg(f"📊 <b>Sell Update | {elapsed} min</b>\n"
+           f"{sd.upper()} {ss:,.0f}: ₹{ep:.2f}→₹{current:.2f}\n"
+           f"Captured: {captured:.0%}/{tp:.0%} | {'+'if pnl>=0 else ''}₹{pnl:,.0f}")
+
+def monitor_buy(strikes,elapsed):
+    with TRADE_L:
+        bs=TRADE["buy_strike"]; bd=TRADE["buy_side"]
+        entry=TRADE["buy_entry"]; tgt=TRADE["buy_tgt"]
+        csl=TRADE["buy_sl"]
+        l1t=TRADE["l1_trig"]; l1s=TRADE["l1_sl"]
+        l2t=TRADE["l2_trig"]; l2s=TRADE["l2_sl"]
+        l1d=TRADE["l1_done"]; l2d=TRADE["l2_done"]
+        qty=TRADE["qty"]
+    match=next((s for s in strikes if s["strike"]==bs),None)
+    if not match: return
+    current=match.get(f"{bd}_ltp",0)
+    if not current or current<=0: return
+    pnl=round((current-entry)*qty,0)
+    if elapsed>=SCALP_TIME_STOP:
+        tg(f"⏰ <b>SCALP TIME STOP ({SCALP_TIME_STOP}min) — EXIT NOW</b>\n"
+           f"BUY {bd.upper()} {bs:,.0f}\n₹{entry:.2f}→₹{current:.2f}\n"
+           f"{'+'if pnl>=0 else ''}₹{pnl:,.0f}\n→ /tradesquared")
+        if pnl>0: register_profit(pnl,"scalp")
+        else: register_sl("scalp",abs(pnl))
+        with TRADE_L: TRADE["active"]=False; return
+    if current>=tgt:
+        tg(f"🎯 <b>SCALP TARGET — BOOK NOW</b>\n"
+           f"BUY {bd.upper()} {bs:,.0f}\n₹{entry:.2f}→₹{current:.2f}\n"
+           f"<b>+₹{pnl:,.0f} (+₹{SCALP_TGT_PTS}/unit)</b>\n→ /tradesquared")
+        register_profit(pnl,"scalp")
+        with TRADE_L: TRADE["active"]=False; return
+    if current<=csl:
+        tg(f"🛑 <b>SCALP SL HIT — EXIT NOW</b>\n"
+           f"BUY {bd.upper()} {bs:,.0f}\n₹{entry:.2f}→₹{current:.2f}\n"
+           f"-₹{abs(pnl):,.0f}\n→ /sl")
+        with TRADE_L: TRADE["active"]=False
+        register_sl("scalp",abs(pnl)); return
+    if not l2d and current>=l2t:
+        tg(f"⭐ <b>TRAIL T2 — Move SL to ₹{l2s:.2f}</b>\n"
+           f"Premium ₹{current:.2f} (+80% of target)\nLocked: +₹{round((l2s-entry)*qty,0):,.0f}")
+        with TRADE_L: TRADE["buy_sl"]=l2s; TRADE["l2_done"]=True; return
+    if not l1d and current>=l1t:
+        tg(f"✅ <b>TRAIL T1 — Move SL to breakeven ₹{l1s:.2f}</b>\n"
+           f"Premium ₹{current:.2f} (+50% of target) | Cannot lose now")
+        with TRADE_L: TRADE["buy_sl"]=l1s; TRADE["l1_done"]=True
+
+# ===== JOBS =====
+def job_login():
+    if not is_trading_day(): return
+    print("[Login] Auto-login 8:30 AM...")
+    if neo_login():
+        tg(f"🔑 <b>Kotak Neo Connected</b>\n{now_ist().strftime('%H:%M:%S')} IST")
+    else:
+        tg("🚨 <b>Login Failed</b>\nCheck TOTP secret + MPIN.\nSend /login to retry.")
+
+def job_premarket():
+    if not is_trading_day(): return
+    key,u=get_underlying(); reset_daily(); or_reset(key)
+
+    expiries=neo_expiries(key)
+    dte_str=""
+    if expiries:
+        dte=compute_dte(expiries[0])
+        sweet="⭐ SWEET SPOT" if 3<=dte<=5 else "⚡ GAMMA RISK" if dte<=2 else "📅 Early week"
+        dte_str=f"DTE: {dte} — {sweet}\n"
+
+    candles=neo_candles(key,5,5); prev=prev_ohlc(candles) if candles else None
+    pivot_str=""; gap_str=""
+    if prev:
+        piv=compute_pivots(prev["high"],prev["low"],prev["close"])
+        pivot_str=f"Prev Close: {prev['close']:,.2f}\nPivot: {piv['pivot']:,.2f} | R1: {piv['r1']:,.2f} | S1: {piv['s1']:,.2f}\n"
+        spot=neo_spot(key)
+        if spot:
+            gp=(spot-prev["close"])/prev["close"]*100
+            gi="⬆️" if gp>0 else "⬇️"
+            gn="🚀 EXTREME" if abs(gp)>1.75 else "🔥 LARGE" if abs(gp)>1.00 else "⚠️ GAP" if abs(gp)>0.55 else ""
+            gap_str=f"Pre-open: {spot:,.2f} {gi} ({gp:+.2f}%) {gn}\n"
+
+    tg(
+        f"☀️ <b>PRE-MARKET — {u['name']}</b>{' ⚡ EXPIRY' if is_expiry(key) else ''}\n"
+        f"{'📝 PAPER' if PAPER else '🔴 LIVE'} | v5.0 | Kotak Neo\n\n"
+        f"{dte_str}{gap_str}{pivot_str}\n"
+        f"Target: ₹{DAILY_TARGET:,.0f} | Scalp: 5L | Sell: 2L\n\n"
+        f"9:15 → OR tracking\n"
+        f"9:30 → OR lock\n"
+        f"9:45 → Tentative classification\n"
+        f"10:30 → Mode LOCKED (SCALP/SELL/NO TRADE)\n"
+        f"<i>Bot silent until mode confirmed.</i>"
+    )
+
+def job_or_track():
+    if not is_trading_day(): return
+    or_track()
+
+def job_or_lock():
+    if not is_trading_day(): return
+    or_lock()
+
+def job_classify(is_final=False):
+    """Run at 9:45 (tentative) and 10:30 (final)."""
+    if not is_trading_day(): return
+    n=now_ist()
+    if n<n.replace(hour=9,minute=30): return
+
+    with DAY_L:
+        if DAY_STATE["mode_locked"]: return  # already locked
+
+    key,u=get_underlying()
+    candles5=neo_candles(key,5,5)
+    candles15=neo_candles(key,15,10)
+    spot=neo_spot(key)
+    if not candles5 or not candles15 or not spot: return
+
+    atr=compute_atr(candles5["high"],candles5["low"],candles5["close"])
+    mode,trend_pts,chop_pts,details=classify_day(candles5,candles15,spot,atr)
+
+    # At 9:45 tentative — only fire scalp if 5/5 agree
+    if not is_final:
+        if trend_pts>=5:
+            lock_day_mode(mode,trend_pts,chop_pts,details,is_final=False)
+        else:
+            print(f"[Classify] Tentative: trend={trend_pts} chop={chop_pts} — waiting for 10:30")
+        return
+
+    # 10:30 final lock
+    lock_day_mode(mode,trend_pts,chop_pts,details,is_final=True)
+
+    # Immediately try signal after classification
+    job_signal_check()
+
+def job_signal_check():
+    """Core signal check — runs every 5 min."""
+    if not is_trading_day(): return
+    n=now_ist()
+    if n<n.replace(hour=9,minute=30) or n>n.replace(hour=14,minute=55): return
+
+    with RISK_L:
+        if RISK["halted"]: return
+    with TRADE_L:
+        if TRADE["active"]: return  # don't fire new signal while in trade
+
+    with DAY_L:
+        mode=DAY_STATE.get("mode")
+        locked=DAY_STATE.get("mode_locked",False)
+
+    if not mode or mode=="NO_TRADE": return
+    if not locked and n<n.replace(hour=10,minute=30): return  # wait for lock
+
+    key,_=get_underlying()
+    snap=build_snapshot(key)
+    if "error" in snap: print(f"[Signal] Snap: {snap['error']}"); return
+
+    if mode=="SCALP":
+        ok,_=can_fire("BUY")
+        if not ok: return
+        tq,_=time_quality("BUY")
+        if tq<0.70: return
+        direction,score,reasons=check_scalp_signal(snap)
+        if direction:
+            print(f"[Signal] Scalp {direction} — score {score}/4 — {reasons}")
+            fire_scalp(snap,direction)
+        else:
+            print(f"[Signal] Scalp skipped — {reasons}")
+
+    elif mode=="SELL":
+        ok,_=can_fire("SELL")
+        if not ok: return
+        sell_ok,sell_reason=check_sell_signal(snap)
+        if sell_ok:
+            print(f"[Signal] Sell check passed — {sell_reason}")
+            fire_sell(snap,sell_reason)
+        else:
+            print(f"[Signal] Sell skipped — {sell_reason}")
+
+def job_pre_close():
+    if not is_trading_day(): return
+    key,_=get_underlying()
+    with RISK_L: s=RISK["scalps"]; sv=RISK["sells"]; p=RISK["pnl"]
+    with TRADE_L: ta=TRADE["active"]; TRADE["active"]=False
+    msg=(f"⏰ <b>PRE-CLOSE 2:55 PM</b>\nClose ALL positions now.\n\n"
+         f"Today: {s} scalps | {sv} sells\n"
+         f"P&L: {'+'if p>=0 else ''}₹{p:,.0f} / ₹{DAILY_TARGET:,.0f}\n")
+    if ta: msg+="⚠️ <b>Active trade — close NOW</b>\n"
+    tg(msg)
+
+def job_eod():
+    if not is_trading_day(): return
+    key,u=get_underlying()
+    with TRADE_L: TRADE["active"]=False
+    snap=build_snapshot(key)
+    if "error" not in snap and snap.get("atm_iv",0)>0:
+        store_eod_iv(key,snap["atm_iv"])
+    with RISK_L:
+        sl=RISK["sl_hits"]; s=RISK["scalps"]; sv=RISK["sells"]
+        p=RISK["pnl"]; sp=RISK["scalp_pnl"]; svp=RISK["sell_pnl"]
+    with DAY_L: mode=DAY_STATE.get("mode","?")
+    iv_days=len(load_iv().get(key,{}))
+    icon="✅" if p>=DAILY_TARGET else "⚠️" if p>0 else "❌"
+    tg(
+        f"🌙 <b>EOD — {u['name']} | v5.0</b>\n\n"
+        f"{icon} <b>Total P&L: {'+'if p>=0 else ''}₹{p:,.0f} / ₹{DAILY_TARGET:,.0f}</b>\n\n"
+        f"⚡ Scalps: {s} trades | {'+'if sp>=0 else ''}₹{sp:,.0f}\n"
+        f"📉 Sells:  {sv} trades | {'+'if svp>=0 else ''}₹{svp:,.0f}\n\n"
+        f"Day mode: {mode} | SL hits: {sl}/2\n"
+        f"IV history: {iv_days}/15 days\n"
+        f"{'📝 PAPER' if PAPER else '🔴 LIVE'}"
+    )
+
+def job_health():
+    _,u=get_underlying()
+    print(f"[Health] {u['name']} {now_ist().strftime('%H:%M')} | Connected: {neo() is not None}")
+
+# ===== TELEGRAM COMMANDS =====
+def tg_updates(offset=None, timeout=30):
+    params={"timeout":timeout}
+    if offset: params["offset"]=offset
+    try:
+        r=requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                       params=params,timeout=timeout+5)
+        if r.status_code==200: return r.json().get("result",[])
+    except Exception as e: print(f"[TG] {e}")
+    return []
+
+def get_prev_ohlc_reliable(key):
+    """
+    Get previous day OHLC using hourly candles.
+    Works at any time — before/during/after market.
+    """
+    # Try hourly candles first (more reliable for prev day)
+    candles=neo_candles(key,mins=60,days=5)
+    if candles:
+        result=prev_ohlc(candles)
+        if result: return result
+    # Fallback to 5-min
+    candles=neo_candles(key,mins=5,days=5)
+    if candles:
+        result=prev_ohlc(candles)
+        if result: return result
+    return None
+
+def format_snapshot_msg(snap, title="📸 SNAPSHOT"):
+    """Full snapshot message for /snapshot, /nifty, /sensex."""
+    if "error" in snap: return f"❌ {snap['error']}"
+    a=snap["analysis"]; spot=a["spot"]; atm=a["atm"]
+    u_name=snap.get("underlying_name","?")
+    st=snap.get("st_signal","?"); stv=snap.get("st_val")
+    dte=snap.get("dte",5); iv_rank=snap.get("iv_rank")
+
+    # VWAP
+    candles5=snap.get("candles5",{})
+    vwap=compute_vwap(candles5) if candles5 else None
+    _,_,_,c,_=get_today_candles(candles5,30) if candles5 else ([],[],[],[],[])
+    ema9=compute_ema(c,9) if len(c)>=9 else None
+
+    msg=f"{title} — {u_name}\n"
+    msg+=f"{now_ist().strftime('%H:%M:%S')} IST\n"
+    msg+=f"Spot: <b>{spot:,.2f}</b> | DTE: {dte}\n"
+    msg+=f"ATM: {atm['strike']:,.0f} | PCR: {a['pcr']}\n"
+    msg+=f"Max Pain: {a.get('max_pain',0):,.0f}\n"
+
+    # Gap
+    gap_type=snap.get("gap_type","FLAT_OPEN"); gap_pct=snap.get("gap_pct",0)
+    if gap_type not in ["FLAT_OPEN","UNKNOWN"]:
+        msg+=f"Gap: {gap_type.replace('_',' ')} ({gap_pct:+.2f}%)\n"
+
+    if snap.get("is_expiry_day"): msg+="⚡ EXPIRY DAY\n"
+
+    # Indicators
+    msg+=f"\n<b>Indicators:</b>\n"
+    msg+=f"ST(10,3): {'🟢 BUY' if st=='BUY' else '🔴 SELL' if st=='SELL' else '❓'}"
+    if stv: msg+=f" @ {stv:,.2f}"
+    msg+="\n"
+    if vwap: msg+=f"VWAP: {vwap:,.2f} ({'✅ Above' if spot>vwap else '❌ Below'})\n"
+    if ema9: msg+=f"9EMA: {ema9:,.2f} ({'✅ Above' if spot>ema9 else '❌ Below'})\n"
+    if iv_rank is not None: msg+=f"IV Rank: {iv_rank:.0f}/100\n"
+
+    # OR
+    with OR_L:
+        if OR_STATE["locked"] and OR_STATE["high"]:
+            oh=OR_STATE["high"]; ol=OR_STATE["low"]
+            msg+=f"\nOR: {ol:,.2f}–{oh:,.2f} | "
+            if spot>oh: msg+=f"⬆️ ABOVE (+{spot-oh:.0f})\n"
+            elif spot<ol: msg+=f"⬇️ BELOW (-{ol-spot:.0f})\n"
+            else: msg+="🎯 INSIDE\n"
+
+    # Pivots
+    p=snap.get("pivots")
+    if p: msg+=f"Pivot: {p['pivot']:,.2f} | R1: {p['r1']:,.2f} | S1: {p['s1']:,.2f}\n"
+
+    # ATM premiums
+    msg+=f"\n<b>ATM Premiums:</b>\n"
+    msg+=f"CE: ₹{atm['ce_ltp']:.2f} | IV: {atm['ce_iv']:.1f}%\n"
+    msg+=f"PE: ₹{atm['pe_ltp']:.2f} | IV: {atm['pe_iv']:.1f}%\n"
+
+    # L2 depth
+    cb=atm.get("ce_bid_qty",0); ca=atm.get("ce_ask_qty",0)
+    pb=atm.get("pe_bid_qty",0); pa=atm.get("pe_ask_qty",0)
+    if cb or ca: msg+=f"CE L2: bid={cb:,.0f} ask={ca:,.0f}"
+    if cb and ca and ca>0: msg+=f" ratio={cb/ca:.1f}"
+    if cb or ca: msg+="\n"
+    if pb or pa: msg+=f"PE L2: bid={pb:,.0f} ask={pa:,.0f}"
+    if pb and pa and pa>0: msg+=f" ratio={pb/pa:.1f}"
+    if pb or pa: msg+="\n"
+
+    # OI
+    msg+=f"\n<b>🔴 Top Call OI:</b>\n"
+    for s in a["top_ce_oi"][:3]:
+        chg=s.get("ce_oi_change",0)
+        msg+=f"  {s['strike']:,.0f}: {s['ce_oi']:,} {'📈' if chg>0 else '📉'}{chg:+,}\n"
+    msg+=f"<b>🟢 Top Put OI:</b>\n"
+    for s in a["top_pe_oi"][:3]:
+        chg=s.get("pe_oi_change",0)
+        msg+=f"  {s['strike']:,.0f}: {s['pe_oi']:,} {'📈' if chg>0 else '📉'}{chg:+,}\n"
+
+    # Day mode
+    with DAY_L: mode=DAY_STATE.get("mode","?"); locked=DAY_STATE.get("mode_locked",False)
+    msg+=f"\nDay Mode: <b>{mode}</b> {'🔒' if locked else '⏳'}"
+    return msg
+
+def handle_cmd(text, chat_id):
+    # Strip @botname suffix and normalize
+    text=text.strip().lower().split("@")[0]
+    if str(chat_id)!=str(TG_CHAT): return
+    print(f"[TG] {text}")
+
+    if text=="/login":
+        tg("⏳ Logging in...")
+        if neo_login(): tg("✅ <b>Kotak Neo Connected</b>")
+        else: tg("❌ Login failed. Check TOTP + MPIN.")
+
+    elif text in ["/signal","/trade"]:
+        with DAY_L: mode=DAY_STATE.get("mode","?"); locked=DAY_STATE.get("mode_locked",False)
+        if not locked and now_ist().hour<10:
+            tg(f"ℹ️ Day mode not locked yet (locks 10:30 AM).\nCurrent read: {mode}\nSend /classify for details.")
+            return
+        tg(f"⏳ Computing {mode} signal...")
+        job_signal_check()
+
+    elif text in ["/classify","/mode","/regime"]:
+        with DAY_L:
+            mode=DAY_STATE.get("mode","?"); locked=DAY_STATE.get("mode_locked",False)
+            ts=DAY_STATE.get("trend_score",0); cs=DAY_STATE.get("chop_score",0)
+            er=DAY_STATE.get("er"); adx=DAY_STATE.get("adx")
+            vd=DAY_STATE.get("vwap_dir","?"); orr=DAY_STATE.get("or_ratio")
+            gap=DAY_STATE.get("gap_pct",0)
+        er_str=f"{er:.3f}" if er is not None else "N/A"
+        adx_str=f"{adx:.1f}" if adx is not None else "N/A"
+        orr_str=f"{orr:.2f}" if orr is not None else "N/A"
+        icon="⚡" if mode=="SCALP" else "📉" if mode=="SELL" else "💰" if mode=="NO_TRADE" else "⏳"
+        tg(f"🧠 <b>Day Classification</b>\n\n"
+           f"{icon} Mode: <b>{mode}</b> {'🔒 LOCKED' if locked else '⏳ PENDING (locks 10:30)'}\n"
+           f"Trend: {ts}/5 | Chop: {cs}/5\n\n"
+           f"ER:       {er_str} {'✅T' if er and er>TREND_ER else '✅C' if er and er<CHOP_ER else '–'}\n"
+           f"ADX:      {adx_str} {'✅T' if adx and adx>TREND_ADX else '✅C' if adx and adx<CHOP_ADX else '–'}\n"
+           f"OR R/ATR: {orr_str} {'✅T' if orr and orr>TREND_OR else '✅C' if orr and orr<CHOP_OR else '–'}\n"
+           f"Gap:      {gap:.2f}% {'✅T' if gap>TREND_GAP else '✅C' if gap<CHOP_GAP else '–'}\n"
+           f"VWAP:     {vd} {'✅T' if vd=='DIRECTIONAL' else '✅C' if vd=='OSCILLATING' else '–'}\n\n"
+           f"<i>Send /signal after 10:30 to force check</i>")
+
+    elif text in ["/snapshot","/snap"]:
+        tg("⏳ Fetching snapshot...")
+        key,_=get_underlying()
+        snap=build_snapshot(key)
+        tg(format_snapshot_msg(snap,"📸 SNAPSHOT"))
+
+    elif text=="/nifty":
+        tg("⏳ Fetching Nifty...")
+        snap=build_snapshot("nifty")
+        tg(format_snapshot_msg(snap,"📸 NIFTY"))
+
+    elif text=="/sensex":
+        tg("⏳ Fetching Sensex...")
+        snap=build_snapshot("sensex")
+        tg(format_snapshot_msg(snap,"📸 SENSEX"))
+
+    elif text=="/oi":
+        tg("⏳ Fetching OI...")
+        key,u=get_underlying()
+        snap=build_snapshot(key)
+        if "error" in snap: tg(f"❌ {snap['error']}"); return
+        a=snap["analysis"]; spot=a["spot"]
+        msg=f"📊 <b>OI — {u['name']}</b>\n"
+        msg+=f"Spot: {spot:,.2f} | PCR: {a['pcr']}\n"
+        msg+=f"Max Pain: {a.get('max_pain',0):,.0f}\n\n"
+        msg+="<b>🔴 Top Call OI (resistance):</b>\n"
+        for s in a["top_ce_oi"][:5]:
+            chg=s.get("ce_oi_change",0); dist=s["strike"]-spot
+            msg+=f"  {s['strike']:,.0f} ({dist:+.0f}): {s['ce_oi']:,} {'📈' if chg>0 else '📉'}{chg:+,}\n"
+        msg+="<b>🟢 Top Put OI (support):</b>\n"
+        for s in a["top_pe_oi"][:5]:
+            chg=s.get("pe_oi_change",0); dist=s["strike"]-spot
+            msg+=f"  {s['strike']:,.0f} ({dist:+.0f}): {s['pe_oi']:,} {'📈' if chg>0 else '📉'}{chg:+,}\n"
+        top_ce=a["top_ce_oi"][0]["strike"] if a["top_ce_oi"] else None
+        top_pe=a["top_pe_oi"][0]["strike"] if a["top_pe_oi"] else None
+        if top_ce and top_pe:
+            msg+=f"\nCall wall: {top_ce:,.0f} | Put wall: {top_pe:,.0f}\n"
+            msg+=f"Range: {top_pe:,.0f}–{top_ce:,.0f} ({top_ce-top_pe:.0f} pts)"
+        tg(msg)
+
+    elif text in ["/sl","/slhit"]:
+        with TRADE_L:
+            mode="scalp" if TRADE.get("is_buy") else "sell"
+            was_active=TRADE["active"]
+            TRADE["active"]=False
+        register_sl(mode)
+
+    elif text in ["/tradesquared","/closed"]:
+        with TRADE_L: was=TRADE["active"]; TRADE["active"]=False
+        tg("✅ Trade cleared." if was else "ℹ️ No active trade.")
+
+    elif text in ["/monitor","/trade_status"]:
+        with TRADE_L:
+            if not TRADE["active"]: tg("ℹ️ No active trade."); return
+            elapsed=int((now_ist()-TRADE["entry_time"]).total_seconds()/60)
+            if TRADE["is_buy"]:
+                tg(f"📊 <b>SCALP Trade | {elapsed} min</b>\n"
+                   f"Strike: {TRADE['buy_strike']:,.0f} {TRADE['buy_side'].upper()}\n"
+                   f"Entry: ₹{TRADE['buy_entry']:.2f} | SL: ₹{TRADE['buy_sl']:.2f}\n"
+                   f"Target: ₹{TRADE['buy_tgt']:.2f}\n"
+                   f"T1 trail: {'✅' if TRADE['l1_done'] else '⏳ @ ₹'+str(TRADE['l1_trig'])}\n"
+                   f"T2 trail: {'✅' if TRADE['l2_done'] else '⏳ @ ₹'+str(TRADE['l2_trig'])}\n"
+                   f"Time stop: {SCALP_TIME_STOP} min | Elapsed: {elapsed} min")
+            else:
+                tg(f"📊 <b>SELL Trade | {elapsed} min</b>\n"
+                   f"Strategy: {TRADE['strategy']}\n"
+                   f"Short: {TRADE['short_side'].upper()} {TRADE['short_strike']:,.0f}\n"
+                   f"Credit: ₹{TRADE['net_credit']:.2f}/lot\n"
+                   f"Target: {TRADE['tgt_pct']:.0%} capture\n"
+                   f"SL: {TRADE['sl_mult']}× credit\n"
+                   f"Hard exit: 2:30 PM")
+
+    elif text=="/or":
+        with OR_L:
+            if not OR_STATE["locked"]:
+                tg("⏳ OR not locked yet.\nOR tracks 9:15–9:30 AM and locks at 9:30.")
+                return
+            oh=OR_STATE["high"]; ol=OR_STATE["low"]
+            gt=OR_STATE["gap_type"]; gp=OR_STATE["gap_pct"]
+            ticks=OR_STATE["ticks"]
+        spot=neo_spot(get_underlying()[0])
+        atr_val=None
+        candles=neo_candles(get_underlying()[0],5,5)
+        if candles: atr_val=compute_atr(candles["high"],candles["low"],candles["close"])
+        ratio=round((oh-ol)/atr_val,2) if atr_val else None
+        pos=""
+        if spot:
+            if spot>oh: pos=f"⬆️ ABOVE OR (+{spot-oh:.0f} pts)"
+            elif spot<ol: pos=f"⬇️ BELOW OR (-{ol-spot:.0f} pts)"
+            else: pos="🎯 INSIDE OR"
+        tg(f"📊 <b>Opening Range</b>\n"
+           f"High: {oh:,.2f} | Low: {ol:,.2f}\n"
+           f"Range: {oh-ol:.1f} pts | Ticks: {ticks}\n"
+           f"{'R/ATR: '+str(ratio) if ratio else ''}\n"
+           f"Gap: {gt.replace('_',' ')} ({gp:+.2f}%)\n"
+           f"{'Spot '+str(round(spot,2))+' → '+pos if spot else ''}")
+
+    elif text in ["/spot","/ltp"]:
+        key,u=get_underlying()
+        ltp=neo_spot(key)
+        if ltp: tg(f"💰 <b>{u['name']}:</b> {ltp:,.2f} | {now_ist().strftime('%H:%M:%S')}")
+        else: tg("❌ Could not fetch spot")
+
+    elif text=="/levels":
+        tg("⏳ Fetching levels...")
+        key,u=get_underlying()
+        # Use hourly candles — always works, pre-market or during market
+        prev=get_prev_ohlc_reliable(key)
+        if not prev:
+            tg("❌ Could not fetch previous day OHLC.\nCheck API connection — send /login")
+            return
+        p=compute_pivots(prev["high"],prev["low"],prev["close"])
+        spot=neo_spot(key)
+        msg=f"📐 <b>Levels — {u['name']}</b>\n"
+        msg+=f"Prev: H={prev['high']:,.2f} L={prev['low']:,.2f} C={prev['close']:,.2f}\n\n"
+        if spot:
+            msg+=f"Spot: <b>{spot:,.2f}</b>\n\n"
+        msg+=f"R2: <b>{p['r2']:,.2f}</b>\n"
+        msg+=f"R1: <b>{p['r1']:,.2f}</b>"
+        if spot: msg+=f"  {'← HERE' if abs(spot-p['r1'])<20 else ''}"
+        msg+=f"\n<b>Pivot: {p['pivot']:,.2f}</b>"
+        if spot: msg+=f"  {'← HERE' if abs(spot-p['pivot'])<20 else ''}"
+        msg+=f"\nS1: <b>{p['s1']:,.2f}</b>"
+        if spot: msg+=f"  {'← HERE' if abs(spot-p['s1'])<20 else ''}"
+        msg+=f"\nS2: <b>{p['s2']:,.2f}</b>"
+        tg(msg)
+
+    elif text in ["/expiries","/expiry"]:
+        key,u=get_underlying()
+        tg(f"⏳ Fetching {u['name']} expiries...")
+        exps=neo_expiries(key)
+        if not exps: tg("❌ No expiry data. Market may be closed."); return
+        msg=f"📅 <b>Expiries — {u['name']}</b>\n"
+        for i,e in enumerate(exps[:6]):
+            dte=compute_dte(e)
+            sweet="⭐ SWEET" if 3<=dte<=5 else "⚡ GAMMA" if dte<=2 else "📅"
+            msg+=f"  {i+1}. {e} (DTE {dte}) {sweet}\n"
+        tg(msg)
+
+    elif text in ["/ivrank","/iv"]:
+        key,u=get_underlying(); d=load_iv().get(key,{}); days=len(d)
+        if days<15:
+            tg(f"📊 IV Rank — {u['name']}\n{days}/15 days collected\nNeed {15-days} more trading days")
+        else:
+            vals=list(d.values())
+            tg(f"📊 IV Rank — {u['name']}\n"
+               f"Days: {days} | High: {max(vals):.1f}% | Low: {min(vals):.1f}%\n"
+               f"Current rank will show in /snapshot")
+
+    elif text=="/today":
+        key,u=get_underlying()
+        with RISK_L:
+            sl=RISK["sl_hits"]; h=RISK["halted"]
+            s=RISK["scalps"]; sv=RISK["sells"]
+            p=RISK["pnl"]; sp=RISK["scalp_pnl"]; svp=RISK["sell_pnl"]
+        with DAY_L: mode=DAY_STATE.get("mode","?"); locked=DAY_STATE.get("mode_locked",False)
+        with LAST_L: lt=LAST_SIG["time"]; lm=LAST_SIG["mode"]
+        with TRADE_L: ta="✅ ACTIVE" if TRADE["active"] else "None"
+        market="🏖️ HOLIDAY" if is_holiday() else "🔴 WEEKEND" if is_weekend() else "✅ Trading"
+        tg(f"📅 <b>{now_ist().strftime('%A %d %b %Y')}</b>\n"
+           f"Market: {market} | <b>{u['name']}</b>\n\n"
+           f"Mode: <b>{mode}</b> {'🔒 LOCKED' if locked else '⏳ PENDING'}\n\n"
+           f"⚡ Scalps: {s}/{MAX_SCALPS} | P&L: {'+'if sp>=0 else ''}₹{sp:,.0f}\n"
+           f"📉 Sells:  {sv}/{MAX_SELLS} | P&L: {'+'if svp>=0 else ''}₹{svp:,.0f}\n\n"
+           f"<b>Total: {'+'if p>=0 else ''}₹{p:,.0f} / ₹{DAILY_TARGET:,.0f} target</b>\n\n"
+           f"Last signal: {lt.strftime('%H:%M')+' ('+lm+')' if lt else 'None'}\n"
+           f"Monitor: {ta}\n"
+           f"SL hits: {sl}/2 | {'🛑 HALTED' if h else '✅ Active'}\n"
+           f"{'📝 PAPER' if PAPER else '🔴 LIVE'}")
+
+    elif text in ["/status","/ping"]:
+        _,u=get_underlying()
+        with RISK_L:
+            sl=RISK["sl_hits"]; h=RISK["halted"]
+            s=RISK["scalps"]; sv=RISK["sells"]; p=RISK["pnl"]
+        with DAY_L: mode=DAY_STATE.get("mode","?"); locked=DAY_STATE.get("mode_locked",False)
+        with TRADE_L: ta=TRADE["active"]
+        with REG_L: rt=REGIME.get("time")
+        connected=neo() is not None
+        market="🏖️" if is_holiday() else "🔴" if is_weekend() else "✅"
+        tg(f"✅ <b>Mahakaal v5.0</b>\n"
+           f"{now_ist().strftime('%H:%M:%S')} IST | {market} {u['name']}\n"
+           f"{'📝 PAPER' if PAPER else '🔴 LIVE'}\n"
+           f"API: {'✅ Connected' if connected else '❌ Not connected — send /login'}\n\n"
+           f"Day Mode: <b>{mode}</b> {'🔒' if locked else '⏳ pending'}\n"
+           f"⚡ Scalps: {s}/{MAX_SCALPS} | 📉 Sells: {sv}/{MAX_SELLS}\n"
+           f"P&L: {'+'if p>=0 else ''}₹{p:,.0f} / ₹{DAILY_TARGET:,.0f}\n"
+           f"Monitor: {'✅ ACTIVE' if ta else 'None'}\n"
+           f"SL: {sl}/2 | {'🛑 HALTED' if h else '✅ Active'}\n"
+           f"Last check: {rt.strftime('%H:%M') if rt else 'N/A'}")
+
+    elif text in ["/help","/start"]:
+        _,u=get_underlying()
+        tg(f"🤖 <b>Mahakaal v5.0 — Kotak Neo</b>\n"
+           f"{'📝 PAPER' if PAPER else '🔴 LIVE'} | {u['name']}\n\n"
+           f"<b>Strategy:</b>\n"
+           f"⚡ SCALP → Trend (ADX>25, ER>0.5, OR wide)\n"
+           f"   5 lots | SL ₹20 | TGT ₹30 | 10 min\n"
+           f"   ST(10,3) + Pivot + OR break + VWAP + L2\n\n"
+           f"📉 SELL → Chop (ADX<20, ER<0.25, OR narrow)\n"
+           f"   2 lots | Spreads only | After 10:30 AM\n"
+           f"   50% target | Hard exit 2:30 PM\n\n"
+           f"💰 NO TRADE → Mixed signals → full silence\n\n"
+           f"<b>Market Commands:</b>\n"
+           f"/signal — force signal check\n"
+           f"/classify — day mode + all 5 scores\n"
+           f"/snapshot — full market snapshot\n"
+           f"/nifty — Nifty snapshot\n"
+           f"/sensex — Sensex snapshot\n"
+           f"/oi — OI walls + PCR\n"
+           f"/spot — current LTP\n"
+           f"/or — opening range status\n"
+           f"/levels — pivot levels (always works)\n"
+           f"/expiries — upcoming expiry dates\n"
+           f"/ivrank — IV rank history\n\n"
+           f"<b>Trade Commands:</b>\n"
+           f"/monitor — active trade status\n"
+           f"/tradesquared — close/clear trade\n"
+           f"/sl — register SL hit\n\n"
+           f"<b>Bot Commands:</b>\n"
+           f"/today — full day summary\n"
+           f"/status — bot health check\n"
+           f"/login — manual re-login\n"
+           f"/help — this message")
+    else:
+        tg(f"❓ Unknown: <code>{text}</code>\n/help")
+
+def tg_listener():
+    print("[TG] Listener starting...")
+    last_id=None; processed=set()
+    while True:
+        try:
+            updates=tg_updates(offset=last_id)
+            for upd in updates:
+                uid=upd["update_id"]; last_id=uid+1
+                if uid in processed: continue
+                processed.add(uid)
+                if len(processed)>100: processed=set(list(processed)[-50:])
+                msg=upd.get("message",{}); text=msg.get("text","")
+                chat_id=msg.get("chat",{}).get("id")
+                if text and chat_id: handle_cmd(text,chat_id)
+        except Exception as e:
+            print(f"[TG] {e}"); time.sleep(5)
+
+# ===== MAIN =====
+def main():
+    print("="*60)
+    print(f"MAHAKAAL v5.0 | Paper={PAPER}")
+    print(f"Target: ₹{DAILY_TARGET:,.0f} | Scalp: {SCALP_LOTS}L | Sell: {SELL_LOTS}L")
+    print(f"SL: ₹{SCALP_SL_PTS}/unit | Target: ₹{SCALP_TGT_PTS}/unit")
+    print(f"Started: {now_ist()}")
+    print("="*60)
+
+    reset_daily()
+    if not neo_login():
+        print("[Startup] Login failed — retry at 8:30 AM or /login")
+
+    key,u=get_underlying()
+    dow_n={0:"Monday",1:"Tuesday",2:"Wednesday",3:"Thursday",
+           4:"Friday",5:"Saturday",6:"Sunday"}
+    market="🏖️ HOLIDAY" if is_holiday() else "🔴 WEEKEND" if is_weekend() else "✅ Trading"
+    iv_days=len(load_iv().get(key,{}))
+    connected=neo() is not None
+
+    tg(
+        f"🚀 <b>Mahakaal v5.0</b>\n"
+        f"{now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST\n"
+        f"{'📝 PAPER' if PAPER else '🔴 LIVE'} | {dow_n.get(now_ist().weekday(),'?')} → {u['name']}\n"
+        f"Market: {market}\n"
+        f"API: {'✅ Connected' if connected else '⚠️ /login if needed'}\n\n"
+        f"<b>v5.0 Architecture:</b>\n"
+        f"⚡ SCALP trends → 5 lots | SL ₹20 | TGT ₹30\n"
+        f"   Supertrend(10,3) + Pivot + OR + VWAP + L2\n"
+        f"📉 SELL chop → 2 lots | Spreads only\n"
+        f"💰 NO TRADE → mixed signals → cash\n\n"
+        f"Day classification: 9:45 tentative | 10:30 final\n"
+        f"Kill switch: 2 SL hits OR ₹{DAILY_LOSS_LIMIT:,.0f} loss\n"
+        f"IV history: {iv_days}/15 days\n"
+        f"Send /help"
+    )
+
+    scheduler=BlockingScheduler(timezone=IST)
+
+    # Login
+    scheduler.add_job(job_login,
+        CronTrigger(day_of_week="mon-fri",hour=8,minute=30,timezone=IST),id="login")
+
+    # Pre-market
+    scheduler.add_job(job_premarket,
+        CronTrigger(day_of_week="mon-fri",hour=9,minute=0,timezone=IST),id="premarket")
+
+    # OR tracking 9:15-9:29
+    scheduler.add_job(job_or_track,
+        CronTrigger(day_of_week="mon-fri",hour=9,minute="15-29",second="*/30",timezone=IST),
+        id="or_track",max_instances=1,coalesce=True)
+
+    # OR lock
+    scheduler.add_job(job_or_lock,
+        CronTrigger(day_of_week="mon-fri",hour=9,minute=30,timezone=IST),id="or_lock")
+
+    # Tentative classification at 9:45
+    scheduler.add_job(lambda: job_classify(False),
+        CronTrigger(day_of_week="mon-fri",hour=9,minute=45,timezone=IST),id="classify_tentative")
+
+    # Final classification at 10:30
+    scheduler.add_job(lambda: job_classify(True),
+        CronTrigger(day_of_week="mon-fri",hour=10,minute=30,timezone=IST),id="classify_final")
+
+    # Signal checks every 5 min
+    scheduler.add_job(job_signal_check,
+        CronTrigger(day_of_week="mon-fri",hour="9-14",minute="*/5",timezone=IST),
+        id="signals",max_instances=1,coalesce=True)
+
+    # Trade monitor every 5 min
+    scheduler.add_job(monitor_trade,
+        CronTrigger(day_of_week="mon-fri",hour="9-14",minute="*/5",timezone=IST),
+        id="monitor",max_instances=1,coalesce=True)
+
+    # Pre-close + EOD
+    scheduler.add_job(job_pre_close,
+        CronTrigger(day_of_week="mon-fri",hour=14,minute=55,timezone=IST),id="preclose")
+    scheduler.add_job(job_eod,
+        CronTrigger(day_of_week="mon-fri",hour=15,minute=30,timezone=IST),id="eod")
+    scheduler.add_job(job_health,
+        CronTrigger(minute=0,timezone=IST),id="health")
+
+    print(f"[Scheduler] {len(scheduler.get_jobs())} jobs")
+    threading.Thread(target=tg_listener,daemon=True).start()
+    print("[Main] Running — bot silent until signals...")
+
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt,SystemExit):
+        print("[Main] Stopped")
+
+if __name__=="__main__":
+    main()
