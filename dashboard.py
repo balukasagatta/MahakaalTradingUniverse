@@ -35,8 +35,14 @@ def check_password(p): return hashlib.sha256(p.encode()).hexdigest() == PASSWORD
 st.set_page_config(page_title="MTU", page_icon="🔱", layout="wide",
                    initial_sidebar_state="collapsed")
 
-for k, v in [("authenticated", False), ("theme", "dark"), ("tab", "dashboard")]:
+for k, v in [("authenticated", False), ("theme", "dark"), ("tab", "dashboard"), ("sidebar_open", False)]:
     if k not in st.session_state: st.session_state[k] = v
+
+# Read tab from query params (set by HTML drawer navigation)
+_qp = st.query_params
+if "tab" in _qp:
+    st.session_state.tab = _qp["tab"]
+    st.query_params.clear()
 
 is_dark = st.session_state.theme == "dark"
 BG      = "#080c12" if is_dark else "#f0f2f5"
@@ -314,6 +320,63 @@ def get_events():
         conn.close(); return rows
     except: return []
 
+def fetch_dhan_funds():
+    try:
+        # Re-read token fresh to avoid load_env = split issues
+        token, client_id = None, None
+        with open(ENV_PATH) as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("DHAN_ACCESS_TOKEN="):
+                    token = line[len("DHAN_ACCESS_TOKEN="):]
+                elif line.startswith("DHAN_CLIENT_ID="):
+                    client_id = line[len("DHAN_CLIENT_ID="):]
+        if not token or not client_id: return None
+        r = __import__("requests").get("https://api.dhan.co/v2/fundlimit",
+            headers={"access-token": token, "client-id": client_id,
+                     "Content-Type": "application/json"},
+            timeout=8)
+        if r.status_code != 200: return None
+        d = r.json()
+        print(f"[Dhan] fundlimit: {d}")
+        return float(d.get("availabelBalance") or d.get("availableBalance") or 0) or None
+    except Exception as e:
+        print(f"[Dhan] Error: {e}"); return None
+
+def fetch_kotak_funds():
+    try:
+        import pyotp
+        from neo_api_client import NeoAPI
+        env = load_env()
+        client = NeoAPI(consumer_key=env.get("KOTAK_CONSUMER_KEY",""), environment="prod")
+        client.totp_login(
+            mobile_number=env.get("KOTAK_MOBILE",""),
+            ucc=env.get("KOTAK_UCC",""),
+            totp=pyotp.TOTP(env.get("KOTAK_TOTP_SECRET","")).now())
+        client.totp_validate(mpin=env.get("KOTAK_MPIN",""))
+        lim = client.limits()
+        if isinstance(lim, dict):
+            return float(lim.get("Net") or lim.get("CollateralValue") or 0) or None
+    except Exception as e:
+        print(f"[Kotak] Error: {e}"); return None
+
+def fetch_groww_funds():
+    try:
+        from growwapi import GrowwAPI
+        env = load_env()
+        token = GrowwAPI.get_access_token(
+            api_key=env.get("GROWW_API_KEY",""),
+            secret=env.get("GROWW_SECRET",""))
+        client = GrowwAPI(token)
+        m = client.get_available_margin_details()
+        eq = m.get("equity_margin_details", {})
+        val = (float(m.get("clear_cash") or 0) +
+               float(eq.get("cnc_balance_available") or 0) +
+               float(eq.get("mis_balance_available") or 0))
+        return float(val) if val > 0 else float(m.get("clear_cash") or 0) or None
+    except Exception as e:
+        print(f"[Groww] Error: {e}"); return None
+
 # HEADER
 n = now_ist()
 BTN_BD = "rgba(255,255,255,0.15)" if is_dark else "rgba(0,0,0,0.15)"
@@ -521,78 +584,67 @@ elif tab == "settings":
         Bots: <b style="color:#22c55e">3 Active</b>
     </div></div>""", unsafe_allow_html=True)
     if st.button("Logout", use_container_width=True, key="set_logout"):
-        st.session_state.authenticated=False; st.rerun()
+        st.session_state.authenticated=False; st.session_state.tab="dashboard"; st.rerun()
     st.markdown('<div class="section-label">Capital</div>', unsafe_allow_html=True)
+    with st.spinner("Fetching live balances..."):
+        kotak_bal = fetch_kotak_funds()
+        dhan_bal  = fetch_dhan_funds()
+        groww_bal = fetch_groww_funds()
+    def fmt(v): return f"Rs{v:,.0f}" if v is not None else "\u2014"
+    def clr(v): return TEXT if v is not None else "#ef4444"
+    total = (kotak_bal or 0)+(dhan_bal or 0)+(groww_bal or 0)
     st.markdown(f"""<div class="card"><div style="font-family:'Space Mono';font-size:12px;color:{SUBTEXT}">
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid {BORDER}"><span>Alakh (Kotak)</span><span style="color:{TEXT}">Rs2,00,000</span></div>
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid {BORDER}"><span>SriMhatre (Dhan)</span><span style="color:{TEXT}">Rs3,50,000</span></div>
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid {BORDER}"><span>Guha (Groww)</span><span style="color:{TEXT}">Rs50,000</span></div>
-    <div style="display:flex;justify-content:space-between;padding:8px 0 4px"><span style="color:{TEXT};font-weight:700">Total</span><span style="color:{ACCENT};font-weight:700">Rs6,60,000</span></div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid {BORDER}">
+        <span>Alakh (Kotak)</span><span style="color:{clr(kotak_bal)}">{fmt(kotak_bal)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid {BORDER}">
+        <span>SriMhatre (Dhan)</span><span style="color:{clr(dhan_bal)}">{fmt(dhan_bal)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid {BORDER}">
+        <span>Guha (Groww)</span><span style="color:{clr(groww_bal)}">{fmt(groww_bal)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:10px 0 4px">
+        <span style="color:{TEXT};font-weight:700">Total Available</span>
+        <span style="color:{ACCENT};font-weight:700">{fmt(total) if total>0 else "—"}</span></div>
     </div></div>""", unsafe_allow_html=True)
-
-# ── SIDEBAR NAV ──
-MENU_BG  = "#0f1621" if is_dark else "#ffffff"
-MENU_BD  = "rgba(255,255,255,0.08)" if is_dark else "rgba(0,0,0,0.08)"
-MENU_HV  = "rgba(249,115,22,0.10)"
-ACT_CLR  = "#f97316"
-ICON_CLR = "rgba(255,255,255,0.5)" if is_dark else "rgba(0,0,0,0.4)"
+# ── BOTTOM TAB BAR ──
+cur_tab = st.session_state.tab
+TAB_BG  = "#0d1117" if is_dark else "#ffffff"
+TAB_BD  = "rgba(255,255,255,0.08)" if is_dark else "rgba(0,0,0,0.08)"
+TAB_TX  = "rgba(255,255,255,0.35)" if is_dark else "rgba(0,0,0,0.3)"
 
 st.markdown(f"""
 <style>
-/* Hamburger button */
-.st-key-hamburger {{ position:fixed !important; bottom:24px !important; right:20px !important; z-index:99998 !important; }}
-.st-key-hamburger button {{
-    background:{ACT_CLR} !important; border:none !important;
-    border-radius:50% !important; width:52px !important; height:52px !important;
-    min-height:52px !important; padding:0 !important; font-size:22px !important;
-    box-shadow:0 4px 16px rgba(249,115,22,0.4) !important; cursor:pointer !important; }}
-.st-key-hamburger button:hover {{ background:#ea670c !important; }}
-
-/* Sidebar drawer */
-.st-key-nav_d button, .st-key-nav_t button, .st-key-nav_s button, .st-key-nav_close button {{
-    background:transparent !important; border:none !important;
-    text-align:left !important; width:100% !important;
-    padding:14px 20px !important; border-radius:12px !important;
-    font-size:15px !important; font-weight:500 !important;
-    color:{TEXT} !important; font-family:'Inter',sans-serif !important;
-    box-shadow:none !important; transition:background 0.15s !important; }}
-.st-key-nav_d button:hover, .st-key-nav_t button:hover, .st-key-nav_s button:hover {{
-    background:{MENU_HV} !important; color:{ACT_CLR} !important; }}
-.st-key-nav_close button {{
-    color:{ICON_CLR} !important; font-size:13px !important; padding:10px 20px !important; }}
-
-[data-testid="stSidebar"] {{
-    background:{MENU_BG} !important;
-    border-right:1px solid {MENU_BD} !important;
-}}
-[data-testid="stSidebar"] > div:first-child {{ padding-top:20px !important; }}
+    [data-testid="stSidebar"] {{ display:none !important; }}
+    [data-testid="block-container"] {{ padding-bottom:72px !important; }}
+    .st-key-nav_dashboard, .st-key-nav_tokens, .st-key-nav_settings {{
+        position:fixed !important; bottom:0 !important; z-index:99999 !important;
+        height:60px !important;
+    }}
+    .st-key-nav_dashboard {{ left:0 !important; width:33.33vw !important; }}
+    .st-key-nav_tokens    {{ left:33.33vw !important; width:33.33vw !important; }}
+    .st-key-nav_settings  {{ left:66.66vw !important; width:33.33vw !important; }}
+    .st-key-nav_dashboard button,
+    .st-key-nav_tokens button,
+    .st-key-nav_settings button {{
+        background:{TAB_BG} !important; border:none !important;
+        border-top:1px solid {TAB_BD} !important;
+        box-shadow:none !important; border-radius:0 !important;
+        width:100% !important; height:60px !important; min-height:60px !important;
+        padding:0 !important; color:{TAB_TX} !important;
+        font-family:Syne,sans-serif !important; font-size:11px !important;
+        font-weight:700 !important; letter-spacing:1px !important;
+        text-transform:uppercase !important;
+    }}
+    .st-key-nav_dashboard button:hover,
+    .st-key-nav_tokens button:hover,
+    .st-key-nav_settings button:hover {{ color:#f97316 !important; }}
+    .st-key-nav_{cur_tab} button {{
+        color:#f97316 !important; border-top:2px solid #f97316 !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
-# Hamburger toggle
-if "sidebar_open" not in st.session_state:
-    st.session_state.sidebar_open = False
-
-if st.button("☰", key="hamburger", help="Menu"):
-    st.session_state.sidebar_open = not st.session_state.sidebar_open
-    st.rerun()
-
-if st.session_state.sidebar_open:
-    with st.sidebar:
-        st.markdown(f"""
-        <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;
-                    color:{TEXT};padding:0 20px 16px;border-bottom:1px solid {MENU_BD};margin-bottom:8px">
-            MTU <span style="color:{ACT_CLR}">🔱</span>
-        </div>""", unsafe_allow_html=True)
-        if st.button("📊  Dashboard", key="nav_d", use_container_width=True):
-            st.session_state.tab="dashboard"
-            st.session_state.sidebar_open=False; st.rerun()
-        if st.button("🔑  Tokens", key="nav_t", use_container_width=True):
-            st.session_state.tab="tokens"
-            st.session_state.sidebar_open=False; st.rerun()
-        if st.button("⚙️  Settings", key="nav_s", use_container_width=True):
-            st.session_state.tab="settings"
-            st.session_state.sidebar_open=False; st.rerun()
-        st.markdown(f"<div style='height:1px;background:{MENU_BD};margin:12px 20px'></div>", unsafe_allow_html=True)
-        if st.button("✕  Close", key="nav_close", use_container_width=True):
-            st.session_state.sidebar_open=False; st.rerun()
+if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
+    st.session_state.tab = "dashboard"; st.rerun()
+if st.button("🔑 Tokens", key="nav_tokens", use_container_width=True):
+    st.session_state.tab = "tokens"; st.rerun()
+if st.button("⚙️ Settings", key="nav_settings", use_container_width=True):
+    st.session_state.tab = "settings"; st.rerun()
