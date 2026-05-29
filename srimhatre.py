@@ -103,7 +103,20 @@ def dhan_headers():
     }
 
 # ===== TELEGRAM =====
-def tg(msg, retries=3):
+def _db_alert(msg, category="general"):
+    try:
+        import sqlite3, datetime
+        conn = sqlite3.connect("/home/balukasagatta1709/mahakaal/mahakaal.db", timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            "INSERT INTO alerts (timestamp, bot, category, message) VALUES (?,?,?,?)",
+            (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "srimhatre", category, msg))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"[DB_ALERT] {e}")
+
+def tg(msg, retries=3, category="general"):
+    _db_alert(msg, category)
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     for i in range(retries):
         try:

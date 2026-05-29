@@ -35,7 +35,7 @@ def check_password(p): return hashlib.sha256(p.encode()).hexdigest() == PASSWORD
 st.set_page_config(page_title="MTU", page_icon="🔱", layout="wide",
                    initial_sidebar_state="collapsed")
 
-for k, v in [("authenticated", False), ("theme", "dark"), ("tab", "dashboard"), ("sidebar_open", False)]:
+for k, v in [("authenticated", False), ("theme", "dark"), ("tab", "dashboard"), ("sidebar_open", False), ("pro_unlocked", False)]:
     if k not in st.session_state: st.session_state[k] = v
 
 # Read tab from query params (set by HTML drawer navigation)
@@ -604,6 +604,120 @@ elif tab == "settings":
         <span style="color:{TEXT};font-weight:700">Total Available</span>
         <span style="color:{ACCENT};font-weight:700">{fmt(total) if total>0 else "—"}</span></div>
     </div></div>""", unsafe_allow_html=True)
+# ── PRO TAB ──
+elif tab == "pro":
+    PRO_KEY_HASH = __import__("hashlib").sha256("MAHAKAAL-PRO-2024".encode()).hexdigest()
+    if not st.session_state.pro_unlocked:
+        LOCK_FBG = "#1a2035" if is_dark else "#f7f8fa"
+        LOCK_BD  = "rgba(255,255,255,0.1)" if is_dark else "rgba(0,0,0,0.1)"
+        st.markdown(f"""
+        <style>
+            .st-key-pro_unlock_btn button {{
+                background:linear-gradient(135deg,#f97316,#ea670c) !important;
+                color:#fff !important; border:none !important;
+                border-radius:50px !important; padding:14px 0 !important;
+                font-weight:700 !important; font-size:15px !important;
+                width:100% !important;
+                box-shadow:0 4px 16px rgba(249,115,22,0.35) !important;
+            }}
+            .st-key-pro_key_input [data-testid="stTextInputRootElement"] {{
+                background:{LOCK_FBG} !important;
+                border-radius:14px !important;
+                border:1.5px solid {LOCK_BD} !important;
+            }}
+            .st-key-pro_key_input input {{
+                background:transparent !important;
+                color:{TEXT} !important;
+                font-size:15px !important;
+                padding:16px !important;
+                border:none !important;
+            }}
+        </style>
+        <div style="margin:32px 0 24px;text-align:center">
+            <div style="display:inline-flex;align-items:center;justify-content:center;
+                        width:72px;height:72px;background:rgba(249,115,22,0.12);
+                        border-radius:50%;margin-bottom:20px">
+                <span style="font-size:32px">⚡</span>
+            </div>
+            <div style="font-family:'Syne',sans-serif;font-size:24px;font-weight:800;
+                        color:{TEXT};margin-bottom:8px">Unlock Pro</div>
+            <div style="font-size:13px;color:{SUBTEXT};line-height:1.7;max-width:260px;margin:0 auto">
+                Live bot alerts · Real-time feed · Advanced monitoring
+            </div>
+        </div>""", unsafe_allow_html=True)
+        pro_key = st.text_input("", placeholder="Enter Pro key", type="password", key="pro_key_input")
+        if st.button("Unlock Pro ⚡", use_container_width=True, key="pro_unlock_btn"):
+            import hashlib
+            if hashlib.sha256(pro_key.encode()).hexdigest() == PRO_KEY_HASH:
+                st.session_state.pro_unlocked = True
+                st.rerun()
+            else:
+                st.error("Invalid Pro key")
+    else:
+        # ── LIVE FEED ──
+        import sqlite3 as _sq
+        BOT_COLORS = {"alakh": "#f97316", "srimhatre": "#3b82f6", "guha": "#22c55e"}
+        BOT_NAMES  = {"alakh": "Alakh T20", "srimhatre": "SriMhatre", "guha": "Guha"}
+
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;justify-content:space-between;
+                    padding:8px 0 12px;border-bottom:1px solid {BORDER}">
+            <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:{TEXT}">
+                ⚡ Live Feed</div>
+            <div style="font-size:11px;color:{SUBTEXT};font-family:'Space Mono',monospace">
+                Auto-refresh 5s</div>
+        </div>""", unsafe_allow_html=True)
+
+        # Filter
+        bot_filter = st.selectbox("Filter by bot", ["All", "Alakh T20", "SriMhatre"], key="pro_filter")
+        bot_map = {"All": None, "Alakh T20": "alakh", "SriMhatre": "srimhatre"}
+        selected_bot = bot_map[bot_filter]
+
+        try:
+            conn = _sq.connect("/home/balukasagatta1709/mahakaal/mahakaal.db", timeout=5)
+            if selected_bot:
+                rows = conn.execute(
+                    "SELECT timestamp, bot, category, message FROM alerts "
+                    "WHERE bot=? AND date(timestamp)=date('now','localtime') "
+                    "ORDER BY id DESC LIMIT 50", (selected_bot,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT timestamp, bot, category, message FROM alerts "
+                    "WHERE date(timestamp)=date('now','localtime') "
+                    "ORDER BY id DESC LIMIT 50").fetchall()
+            conn.close()
+        except: rows = []
+
+        if not rows:
+            st.markdown(f"""
+            <div style="text-align:center;padding:40px 0;color:{SUBTEXT}">
+                <div style="font-size:32px;margin-bottom:12px">📡</div>
+                <div>No alerts today yet. Bots will send alerts during market hours.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            for row in rows:
+                ts, bot, cat, msg = row
+                bc = BOT_COLORS.get(bot, ACCENT)
+                bn = BOT_NAMES.get(bot, bot)
+                time_str = ts[11:16] if ts else ""
+                clean_msg = msg.replace("<b>","").replace("</b>","").replace("<i>","").replace("</i>","")
+                st.markdown(f"""
+                <div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {bc};
+                            border-radius:10px;padding:12px 14px;margin-bottom:8px">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                        <span style="font-size:11px;font-weight:700;color:{bc};font-family:'Syne',sans-serif">{bn}</span>
+                        <span style="font-size:10px;color:{SUBTEXT};font-family:'Space Mono',monospace">{time_str}</span>
+                    </div>
+                    <div style="font-size:12px;color:{TEXT};line-height:1.5;font-family:'Space Mono',monospace">{clean_msg}</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("""<script>setTimeout(function(){window.location.reload();},5000);</script>""",
+                    unsafe_allow_html=True)
+
+        # Lock button
+        if st.button("🔒 Lock Pro", key="pro_lock", use_container_width=False):
+            st.session_state.pro_unlocked = False; st.rerun()
+
 # ── BOTTOM TAB BAR ──
 cur_tab = st.session_state.tab
 TAB_BG  = "#0d1117" if is_dark else "#ffffff"
@@ -614,28 +728,24 @@ st.markdown(f"""
 <style>
     [data-testid="stSidebar"] {{ display:none !important; }}
     [data-testid="block-container"] {{ padding-bottom:72px !important; }}
-    .st-key-nav_dashboard, .st-key-nav_tokens, .st-key-nav_settings {{
-        position:fixed !important; bottom:0 !important; z-index:99999 !important;
-        height:60px !important;
+    .st-key-nav_dashboard, .st-key-nav_tokens, .st-key-nav_pro, .st-key-nav_settings {{
+        position:fixed !important; bottom:0 !important; z-index:99999 !important; height:60px !important;
     }}
-    .st-key-nav_dashboard {{ left:0 !important; width:33.33vw !important; }}
-    .st-key-nav_tokens    {{ left:33.33vw !important; width:33.33vw !important; }}
-    .st-key-nav_settings  {{ left:66.66vw !important; width:33.33vw !important; }}
-    .st-key-nav_dashboard button,
-    .st-key-nav_tokens button,
-    .st-key-nav_settings button {{
+    .st-key-nav_dashboard {{ left:0 !important; width:25vw !important; }}
+    .st-key-nav_tokens    {{ left:25vw !important; width:25vw !important; }}
+    .st-key-nav_pro       {{ left:50vw !important; width:25vw !important; }}
+    .st-key-nav_settings  {{ left:75vw !important; width:25vw !important; }}
+    .st-key-nav_dashboard button, .st-key-nav_tokens button,
+    .st-key-nav_pro button, .st-key-nav_settings button {{
         background:{TAB_BG} !important; border:none !important;
         border-top:1px solid {TAB_BD} !important;
         box-shadow:none !important; border-radius:0 !important;
         width:100% !important; height:60px !important; min-height:60px !important;
         padding:0 !important; color:{TAB_TX} !important;
         font-family:Syne,sans-serif !important; font-size:11px !important;
-        font-weight:700 !important; letter-spacing:1px !important;
+        font-weight:700 !important; letter-spacing:0.5px !important;
         text-transform:uppercase !important;
     }}
-    .st-key-nav_dashboard button:hover,
-    .st-key-nav_tokens button:hover,
-    .st-key-nav_settings button:hover {{ color:#f97316 !important; }}
     .st-key-nav_{cur_tab} button {{
         color:#f97316 !important; border-top:2px solid #f97316 !important;
     }}
@@ -646,5 +756,7 @@ if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
     st.session_state.tab = "dashboard"; st.rerun()
 if st.button("🔑 Tokens", key="nav_tokens", use_container_width=True):
     st.session_state.tab = "tokens"; st.rerun()
+if st.button("👑 Live Algo", key="nav_pro", use_container_width=True):
+    st.session_state.tab = "pro"; st.rerun()
 if st.button("⚙️ Settings", key="nav_settings", use_container_width=True):
     st.session_state.tab = "settings"; st.rerun()
