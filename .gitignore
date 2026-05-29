@@ -4,3 +4,8 @@ __pycache__/
 .env
 *.db
 *.log
+env.vars
+mahakaal.db
+iv_history.json
+.env.upstox
+*.deb
