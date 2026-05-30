@@ -2333,7 +2333,7 @@ def main():
        f"<b>Data:</b> Upstox websocket + REST\n"
        f"<b>Exec:</b> Kotak Neo (zero brokerage)\n\n"
        f"{dte_str}"
-       f"Sensex: {spot:,.2f} | Nifty: {nifty:,.2f}\n\n"
+       f"Sensex: {spot or 0:,.2f} | Nifty: {nifty or 0:,.2f}\n\n"
        f"<b>Scoring Engine (0-15):</b>\n"
        f"Price action: 6pts | Structure: 4pts\n"
        f"Indicators: 4pts | OI/Flow: 2pts\n\n"

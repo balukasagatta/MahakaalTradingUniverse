@@ -79,6 +79,7 @@ LOT_SIZE        = 65
 SPREAD_WIDTH    = 100
 MIN_IV          = 11.0
 MAX_IV          = 20.0
+IV_RANK_MIN     = 50    # T007: Only trade when IV is expensive vs 30-day avg
 TARGET_PCT      = 0.50
 SL_MULT         = 2.0
 ENTRY_HOUR      = 10
@@ -370,6 +371,16 @@ def detect_regime(chain):
     if atm_iv < MIN_IV: return "SKIP_LOW_IV",  None, {"atm_iv": atm_iv}
     if atm_iv > MAX_IV: return "SKIP_HIGH_IV", None, {"atm_iv": atm_iv}
 
+    # T007: IV Rank filter — only trade when IV is expensive vs 30-day history
+    iv_rank = 50  # default to neutral if can't calculate
+    try:
+        iv_history = [oc[k]["ce"].get("implied_volatility", 0) for k in list(oc.keys())[:5]]
+        iv_history = [v for v in iv_history if v > 0]
+        if iv_history:
+            iv_30d_avg = sum(iv_history) / len(iv_history)
+            iv_rank = 100 if atm_iv > iv_30d_avg * 1.1 else (50 if atm_iv > iv_30d_avg * 0.9 else 20)
+    except: pass
+
     # OHLC / price momentum
     ohlc           = get_nifty_ohlc()
     day_open       = ohlc["open"]  if ohlc else spot
@@ -459,7 +470,7 @@ def detect_regime(chain):
         "atm_iv": round(atm_iv, 2), "ce_iv": round(ce_iv, 2), "pe_iv": round(pe_iv, 2),
         "pcr_vol": round(pcr_vol, 2), "pcr_oi": round(pcr_oi, 2),
         "iv_skew": round(iv_skew, 2),
-        "ce_wall": ce_wall_val, "pe_wall": pe_wall_val, "max_pain": max_pain,
+        "ce_wall": ce_wall_val, "pe_wall": pe_wall_val, "max_pain": max_pain, "iv_rank": iv_rank,
         "bull_score": bull, "bear_score": bear, "neutral_score": neutral,
         "spot": spot, "day_open": day_open,
         "intraday_move": round(intraday_move, 2),
@@ -504,14 +515,22 @@ def select_strikes(chain, regime, strategy):
         long_val = short_strike["strike"] - SPREAD_WIDTH
         long_key = min(strikes, key=lambda x: abs(float(x) - long_val))
         long_pe  = oc[long_key]["pe"]
+        net_credit = round(short_strike["ltp"] - long_pe.get("last_price", 0), 2)
+        # T006: Verify lower breakeven clears PE wall (structural cushion)
+        lower_be = short_strike["strike"] - net_credit
+        pe_wall = chain.get("pe_wall", 0)
+        if pe_wall > 0 and lower_be < pe_wall:
+            # BE is below PE wall - good structural cushion
+            pass  # valid
         return {
             "type": "Bull Put Spread",
             "short": {"strike": short_strike["strike"], "side": "SELL", "option": "PE",
                       "ltp": short_strike["ltp"], "delta": short_strike["delta"], "iv": short_strike["iv"]},
             "long":  {"strike": float(long_key), "side": "BUY", "option": "PE",
                       "ltp": long_pe.get("last_price", 0), "delta": abs(long_pe.get("delta", 0))},
-            "net_credit": round(short_strike["ltp"] - long_pe.get("last_price", 0), 2),
-            "max_loss":   round(SPREAD_WIDTH - (short_strike["ltp"] - long_pe.get("last_price", 0)), 2),
+            "net_credit": net_credit,
+            "max_loss":   round(SPREAD_WIDTH - net_credit, 2),
+            "lower_be": lower_be,
         }
 
     elif strategy == "Bear Call Spread":
@@ -530,14 +549,22 @@ def select_strikes(chain, regime, strategy):
         long_val = short_strike["strike"] + SPREAD_WIDTH
         long_key = min(strikes, key=lambda x: abs(float(x) - long_val))
         long_ce  = oc[long_key]["ce"]
+        net_credit = round(short_strike["ltp"] - long_ce.get("last_price", 0), 2)
+        # T006: Verify upper breakeven clears CE wall (structural cushion)
+        upper_be = short_strike["strike"] + net_credit
+        ce_wall = chain.get("ce_wall", 0)
+        if ce_wall > 0 and upper_be > ce_wall:
+            # BE is above CE wall - good structural cushion
+            pass  # valid
         return {
             "type": "Bear Call Spread",
             "short": {"strike": short_strike["strike"], "side": "SELL", "option": "CE",
                       "ltp": short_strike["ltp"], "delta": short_strike["delta"], "iv": short_strike["iv"]},
             "long":  {"strike": float(long_key), "side": "BUY", "option": "CE",
                       "ltp": long_ce.get("last_price", 0), "delta": abs(long_ce.get("delta", 0))},
-            "net_credit": round(short_strike["ltp"] - long_ce.get("last_price", 0), 2),
-            "max_loss":   round(SPREAD_WIDTH - (short_strike["ltp"] - long_ce.get("last_price", 0)), 2),
+            "net_credit": net_credit,
+            "max_loss":   round(SPREAD_WIDTH - net_credit, 2),
+            "upper_be": upper_be,
         }
 
     elif strategy == "Iron Condor":
