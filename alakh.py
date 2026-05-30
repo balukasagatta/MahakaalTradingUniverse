@@ -873,6 +873,25 @@ def compute_score(
                 put_pts -= 1
                 details["nifty"] = "Nifty diverges (BUY) → -1 PUT"
 
+    # T008. IV Momentum (±1)
+    # Rising IV = faster mean reversion = better scalp conditions
+    if atm_iv and atm_iv > 0:
+        if atm_iv > 17:
+            # High IV rising — strong momentum conditions
+            if st_signal == "BUY":
+                call_pts += 1
+                details["iv_momentum"] = f"High IV {atm_iv:.1f}% rising → +1 CALL"
+            elif st_signal == "SELL":
+                put_pts += 1
+                details["iv_momentum"] = f"High IV {atm_iv:.1f}% rising → +1 PUT"
+        elif atm_iv < 11:
+            # Low IV — premium too cheap, penalize both
+            call_pts -= 1
+            put_pts -= 1
+            details["iv_momentum"] = f"Low IV {atm_iv:.1f}% — premium cheap → -1 both"
+        else:
+            details["iv_momentum"] = f"IV {atm_iv:.1f}% normal range"
+
     # ===== OI/FLOW (2 pts) =====
 
     # 12. tbq vs tsq (±1)
