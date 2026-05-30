@@ -136,6 +136,9 @@ RISK = {
 }
 RISK_L = threading.Lock()
 
+# Pending trade from /signal — used by /enter
+pending_trade = {"strikes": None, "chain": None, "expiry": None, "regime": None, "strategy": None, "details": None}
+
 POSITIONS = []  # active spread positions
 POS_L = threading.Lock()
 POSITIONS_FILE = "sri_positions.json"
@@ -890,6 +893,41 @@ def handle_cmd(text, chat_id):
         target_pnl = round(net_credit * TARGET_PCT * qty, 0)
         sl_pnl = round(net_credit * SL_MULT * qty, 0)
 
+        # Store pending trade for /enter
+        pending_trade["strikes"]  = strikes
+        pending_trade["chain"]    = chain
+        pending_trade["expiry"]   = target_exp
+        pending_trade["regime"]   = regime
+        pending_trade["strategy"] = strategy
+        pending_trade["details"]  = details
+
+        # Build legs display
+        def leg_line(leg, side):
+            return f"  {side} {int(leg['strike'])} {leg['option']} @ ₹{leg['ltp']:.1f} (IV {leg.get('iv', 0):.1f}%)"
+
+        if strategy == "Iron Condor":
+            legs_msg = (
+                f"📋 <b>Legs:</b>\n"
+                f"{leg_line(strikes['bear_call']['short'], 'SELL')}\n"
+                f"{leg_line(strikes['bear_call']['long'],  'BUY ')}\n"
+                f"{leg_line(strikes['bull_put']['short'],  'SELL')}\n"
+                f"{leg_line(strikes['bull_put']['long'],   'BUY ')}"
+            )
+        elif strategy == "Bull Put Spread":
+            legs_msg = (
+                f"📋 <b>Legs:</b>\n"
+                f"{leg_line(strikes['short'], 'SELL')}\n"
+                f"{leg_line(strikes['long'],  'BUY ')}"
+            )
+        elif strategy == "Bear Call Spread":
+            legs_msg = (
+                f"📋 <b>Legs:</b>\n"
+                f"{leg_line(strikes['short'], 'SELL')}\n"
+                f"{leg_line(strikes['long'],  'BUY ')}"
+            )
+        else:
+            legs_msg = ""
+
         msg = (f"🧠 <b>Regime: {regime}</b>\n"
                f"Strategy: <b>{strategy}</b>\n"
                f"Expiry: {target_exp} (DTE {dte})\n\n"
@@ -900,34 +938,45 @@ def handle_cmd(text, chat_id):
                f"Max Pain: {details['max_pain']:,.0f}\n"
                f"CE Wall: {details['ce_wall']:,.0f}\n"
                f"PE Wall: {details['pe_wall']:,.0f}\n\n"
+               f"{legs_msg}\n\n"
                f"Net Credit: ₹{net_credit:.2f}/unit\n"
                f"Target: +₹{target_pnl:,.0f}\n"
                f"SL: -₹{sl_pnl:,.0f}\n\n"
                f"Bull: {details['bull_score']} | "
                f"Bear: {details['bear_score']} | "
-               f"Neutral: {details['neutral_score']}")
+               f"Neutral: {details['neutral_score']}\n\n"
+               f"Type /enter to place this trade")
         tg(msg)
 
     elif cmd == "/enter":
         tg("⏳ Entering position...")
         n = now_ist()
-        if n.hour < ENTRY_HOUR or (n.hour == ENTRY_HOUR and n.minute < ENTRY_MIN):
-            tg(f"❌ Entry only after 10:30 AM\n"
-               f"Current time: {n.strftime('%H:%M')}"); return
         if n.hour >= 15 or n.weekday() > 4:
             tg(f"❌ Market closed. Entry only 10:30 AM - 3:00 PM Mon-Fri."); return
 
-        expiries = get_expiries()
-        target_exp = expiries[1] if len(expiries) > 1 else expiries[0]
-        chain = get_option_chain_upstox(target_exp) or get_option_chain(target_exp)
-        if not chain: tg("❌ Chain fetch failed"); return
+        # Use pending trade from /signal if available
+        if pending_trade["strikes"]:
+            strikes  = pending_trade["strikes"]
+            target_exp = pending_trade["expiry"]
+            regime   = pending_trade["regime"]
+            strategy = pending_trade["strategy"]
+            details  = pending_trade["details"]
+            tg("✅ Using trade from last /signal")
+        else:
+            # No pending trade — fetch fresh
+            tg("🔄 No pending signal — fetching fresh...")
+            expiries = get_expiries()
+            target_exp = expiries[1] if len(expiries) > 1 else expiries[0]
+            chain = get_option_chain_upstox(target_exp) or get_option_chain(target_exp)
+            if not chain: tg("❌ Chain fetch failed"); return
+            regime, strategy, details = detect_regime(chain)
+            if regime and regime.startswith("SKIP"):
+                tg(f"⏭️ Skip day — IV {details.get('atm_iv', 0):.1f}%"); return
+            strikes = select_strikes(chain, regime, strategy)
+            if not strikes: tg("❌ No suitable strikes"); return
 
-        regime, strategy, details = detect_regime(chain)
-        if regime and regime.startswith("SKIP"):
-            tg(f"⏭️ Skip day — IV {details.get('atm_iv', 0):.1f}%"); return
-
-        strikes = select_strikes(chain, regime, strategy)
-        if not strikes: tg("❌ No suitable strikes"); return
+        # Clear pending trade after use
+        pending_trade["strikes"] = None
 
         qty = LOTS * LOT_SIZE
         net_credit = strikes["net_credit"]
