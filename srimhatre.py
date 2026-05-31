@@ -480,6 +480,21 @@ def detect_regime(chain):
     elif iv_skew < -2.0 and strategy in ["Iron Condor", "Bull Put Spread"]:
         strategy = "Bear Call Spread"  # safer — skew protects call sellers
 
+    # T023: Dispersion-Based Regime Signal
+    dispersion_signal = "NEUTRAL"
+    dispersion_val = 0
+    try:
+        from dispersion import get_dispersion_signal
+        dispersion_val, dispersion_signal, disp_details = get_dispersion_signal(
+            atm_iv, os.getenv("UPSTOX_ACCESS_TOKEN", UPSTOX_TOKEN))
+        # Adjust scoring based on dispersion
+        if dispersion_signal == "STRONG_EDGE":
+            neutral += 2  # boost confidence in selling
+        elif dispersion_signal == "NO_EDGE":
+            bull += 1; bear += 1  # muddy the signal — avoid entry
+    except Exception as e:
+        print(f"[Dispersion] {e}")
+
     # T017: VIX Basis Signal (contango = green light for sellers)
     try:
         import requests as _req
@@ -499,6 +514,7 @@ def detect_regime(chain):
     details = {
         "atm_iv": round(atm_iv, 2), "ce_iv": round(ce_iv, 2), "pe_iv": round(pe_iv, 2),
         "vix_spot": round(vix_spot, 2), "vix_basis": vix_basis,
+        "dispersion": dispersion_val, "dispersion_signal": dispersion_signal,
         "pcr_vol": round(pcr_vol, 2), "pcr_oi": round(pcr_oi, 2),
         "iv_skew": round(iv_skew, 2),
         "ce_wall": ce_wall_val, "pe_wall": pe_wall_val, "max_pain": max_pain, "iv_rank": iv_rank,
@@ -1001,7 +1017,8 @@ def handle_cmd(text, chat_id):
                f"PCR Vol: {details['pcr_vol']:.2f} | PCR OI: {details['pcr_oi']:.2f}\n"
                f"IV Skew: {details['iv_skew']:.2f}\n"
                f"Max Pain: {details['max_pain']:,.0f}\n"
-               f"CE Wall: {details['ce_wall']:,.0f} | PE Wall: {details['pe_wall']:,.0f}\n\n"
+               f"CE Wall: {details['ce_wall']:,.0f} | PE Wall: {details['pe_wall']:,.0f}\n"
+            f"Dispersion: {details.get('dispersion', 0):.1f}% ({details.get('dispersion_signal', 'N/A')})\n\n"
                f"{legs_msg}\n\n"
                f"Net Credit: ₹{net_credit:.2f}/unit\n"
                f"Target: +₹{target_pnl:,.0f} | SL: -₹{sl_pnl:,.0f}\n\n"
