@@ -873,6 +873,76 @@ def compute_score(
                 put_pts -= 1
                 details["nifty"] = "Nifty diverges (BUY) → -1 PUT"
 
+    # T012. Three EMA Alignment (±1)
+    ema50 = None  # will be passed when available
+    ema9_val  = snap.get("ema9")  if hasattr(locals(), "snap") else None
+    ema21_val = snap.get("ema21") if hasattr(locals(), "snap") else None
+    # Use function args instead
+    if "ema9" in dir():
+        pass  # already have it from params
+
+    # T012: Check 3-EMA alignment from candles
+    if len(candles_1min) >= 50:
+        closes = [c[4] for c in candles_1min]
+        _ema50 = compute_ema(closes, 50) if len(closes) >= 50 else None
+        _ema9  = compute_ema(closes, 9)
+        _ema21 = compute_ema(closes, 21)
+        if _ema9 and _ema21 and _ema50:
+            if _ema9 > _ema21 > _ema50:  # all aligned bullish
+                call_pts += 1
+                details["ema3"] = f"3-EMA aligned BUY: 9>{_ema21:.0f}>50 → +1 CALL"
+            elif _ema9 < _ema21 < _ema50:  # all aligned bearish
+                put_pts += 1
+                details["ema3"] = f"3-EMA aligned SELL: 9<{_ema21:.0f}<50 → +1 PUT"
+            elif (_ema9 > _ema21 and _ema21 < _ema50) or (_ema9 < _ema21 and _ema21 > _ema50):
+                # EMA50 opposing direction — penalize
+                if st_signal == "BUY":
+                    call_pts -= 1
+                    details["ema3"] = f"EMA50 opposes BUY → -1 CALL"
+                else:
+                    put_pts -= 1
+                    details["ema3"] = f"EMA50 opposes SELL → -1 PUT"
+
+    # T013. Support/Resistance Zone Score (±1)
+    if prev_close and spot:
+        # PDH/PDL breakout confirmation
+        pdh = pivots.get("pdh", 0) if pivots else 0
+        pdl = pivots.get("pdl", 0) if pivots else 0
+        if pdh and spot > pdh and st_signal == "BUY":
+            call_pts += 1
+            details["sr_zone"] = f"Breaking PDH {pdh:,.0f} → +1 CALL"
+        elif pdh and spot < pdh * 0.998 and st_signal == "BUY":
+            call_pts -= 1
+            details["sr_zone"] = f"Hitting PDH resistance {pdh:,.0f} → -1 CALL"
+        elif pdl and spot < pdl and st_signal == "SELL":
+            put_pts += 1
+            details["sr_zone"] = f"Breaking PDL {pdl:,.0f} → +1 PUT"
+        elif pdl and spot > pdl * 1.002 and st_signal == "SELL":
+            put_pts -= 1
+            details["sr_zone"] = f"Hitting PDL support {pdl:,.0f} → -1 PUT"
+
+    # T020. Channel Breakout Score (±1)
+    # 10-candle high/low channel breakout confirmation
+    if len(candles_1min) >= 10:
+        last10 = candles_1min[-10:]
+        ch_high = max(c[2] for c in last10)  # 10-candle high
+        ch_low  = min(c[3] for c in last10)  # 10-candle low
+        if spot and ch_high and ch_low:
+            if spot > ch_high and st_signal == "BUY":
+                call_pts += 1
+                details["channel"] = f"Breaking 10c high {ch_high:,.0f} → +1 CALL"
+            elif spot < ch_high * 0.999 and spot > ch_high * 0.995 and st_signal == "BUY":
+                call_pts -= 1
+                details["channel"] = f"Hitting 10c resistance {ch_high:,.0f} → -1 CALL"
+            elif spot < ch_low and st_signal == "SELL":
+                put_pts += 1
+                details["channel"] = f"Breaking 10c low {ch_low:,.0f} → +1 PUT"
+            elif spot > ch_low * 1.001 and spot < ch_low * 1.005 and st_signal == "SELL":
+                put_pts -= 1
+                details["channel"] = f"Hitting 10c support {ch_low:,.0f} → -1 PUT"
+            else:
+                details["channel"] = f"Inside channel {ch_low:,.0f}-{ch_high:,.0f}"
+
     # T008. IV Momentum (±1)
     # Rising IV = faster mean reversion = better scalp conditions
     if atm_iv and atm_iv > 0:
@@ -1032,12 +1102,16 @@ def build_snapshot():
         closes_1min = [c[4] for c in c1]
         ema9  = compute_ema(closes_1min, 9)
         ema21 = compute_ema(closes_1min, 21)
+        ema50 = compute_ema(closes_1min, 50)
 
         # EMA trend direction
         if ema9 and ema21:
             ema_trend = "BUY" if ema9 > ema21 else "SELL"
         else:
             ema_trend = None
+        # T012: 3-EMA alignment
+        ema_aligned = bool(ema9 and ema21 and ema50 and (
+            (ema9 > ema21 > ema50) or (ema9 < ema21 < ema50)))
 
         # Prev OHLC + pivots
         prev = prev_ohlc()
@@ -1089,10 +1163,10 @@ def build_snapshot():
             "st_sig": st_sig, "st_val": st_val,
             "st_stable": st_stable,
             "prev_st_dir": prev_st_dir,
-            "ema9": ema9, "ema21": ema21,
-            "ema_trend": ema_trend,
+            "ema9": ema9, "ema21": ema21, "ema50": ema50,
+            "ema_trend": ema_trend, "ema_aligned": ema_aligned,
             "nifty_st": nifty_st,
-            "pivots": pivots, "prev_close": prev_close,
+            "pivots": pivots, "prev_close": prev_close, "pdh": pdh, "pdl": pdl,
             "or_locked": or_locked,
             "or_high": or_high, "or_low": or_low,
             "or_open": or_open,
@@ -1291,6 +1365,19 @@ def check_signal(snap):
         return None, 0, 0, {
             "skip": f"Score conflict: {direction}={score} vs opposite={opposite}"
         }, None
+
+    # T024: Economic announcement filter
+    try:
+        from event_calendar import is_high_impact_window
+        event_hit, event_name = is_high_impact_window(30)
+        if event_hit:
+            tg(f"⚠️ <b>SIGNAL HELD — Economic Event</b>\n"
+               f"{event_name} within 30 mins\n"
+               f"Score: {score}/15 | Direction: {direction}\n"
+               f"Resuming after event window")
+            return None, 0, 0, {"skip": f"Event: {event_name}"}, None
+    except Exception as e:
+        print(f"[Event] Check error: {e}")
 
     # Determine threshold
     high_iv = is_high_iv_day(snap["atm_iv"], snap["iv_rank"])

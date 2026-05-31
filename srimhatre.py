@@ -415,7 +415,8 @@ def detect_regime(chain):
     # Max pain
     max_pain = compute_max_pain(oc, strikes)
 
-    # SCORING
+    # SCORING — T015: Weighted Alpha Combo
+    # Weights: PCR OI=2x, Max Pain=2x, IV Skew=1.5x, rest=1x
     bull = bear = neutral = 0
 
     # 1. Price momentum — 3 pts (highest weight)
@@ -430,32 +431,32 @@ def detect_regime(chain):
         if intraday_move < 0:   bear += 2
         else:                   bull += 2
 
-    # 3. IV skew — 2 pts
-    if iv_skew > 2.0:           bear += 2
-    elif iv_skew > 0.5:         bear += 1; neutral += 1
-    elif iv_skew < -2.0:        bull += 2
-    elif iv_skew < -0.5:        bull += 1; neutral += 1
-    else:                       neutral += 2
+    # 3. IV skew — 1.5x weight (3 pts)
+    if iv_skew > 2.0:           bear += 3
+    elif iv_skew > 0.5:         bear += 2; neutral += 1
+    elif iv_skew < -2.0:        bull += 3
+    elif iv_skew < -0.5:        bull += 2; neutral += 1
+    else:                       neutral += 3
 
     # 4. PCR volume — 1 pt
     if pcr_vol > 1.2:           bull += 1
     elif pcr_vol < 0.8:         bear += 1
     else:                       neutral += 1
 
-    # 5. PCR OI — 1 pt
-    if pcr_oi > 1.2:            bull += 1
-    elif pcr_oi < 0.8:          bear += 1
-    else:                       neutral += 1
+    # 5. PCR OI — 2x weight (2 pts) most reliable for Nifty
+    if pcr_oi > 1.2:            bull += 2
+    elif pcr_oi < 0.8:          bear += 2
+    else:                       neutral += 2
 
     # 6. OI walls — 1 pt
     if spot < ce_wall_val and spot > pe_wall_val:   neutral += 1
     elif spot >= ce_wall_val:                        bull += 1
     elif spot <= pe_wall_val:                        bear += 1
 
-    # 7. Max pain — 1 pt
-    if spot > max_pain + 150:   bear += 1
-    elif spot < max_pain - 150: bull += 1
-    else:                       neutral += 1
+    # 7. Max pain — 2x weight (2 pts)
+    if spot > max_pain + 150:   bear += 2
+    elif spot < max_pain - 150: bull += 2
+    else:                       neutral += 2
 
     # Regime decision
     forced_trend = intraday_range > 250 or abs(move_pct) >= 0.6
@@ -466,8 +467,38 @@ def detect_regime(chain):
     else:
         regime = "CHOPPY";        strategy = "Iron Condor"
 
+    # T018: Iron Butterfly override on low-range days
+    # If intraday range < 80pts AND IV > 15% AND choppy → use Iron Butterfly
+    if regime == "CHOPPY" and intraday_range < 80 and atm_iv > 15:
+        strategy = "Iron Butterfly"
+
+    # T014: Volatility Skew Directional Override
+    # Skew > +2 = puts expensive = market fears downside = avoid Bear Call
+    # Skew < -2 = calls expensive = market fears upside = avoid Bull Put
+    if iv_skew > 2.0 and strategy in ["Iron Condor", "Bear Call Spread"]:
+        strategy = "Bull Put Spread"  # safer — skew protects put sellers
+    elif iv_skew < -2.0 and strategy in ["Iron Condor", "Bull Put Spread"]:
+        strategy = "Bear Call Spread"  # safer — skew protects call sellers
+
+    # T017: VIX Basis Signal (contango = green light for sellers)
+    try:
+        import requests as _req
+        vix_r = _req.get("https://api.upstox.com/v2/market-quote/ltp",
+            headers={"Authorization": f"Bearer {UPSTOX_TOKEN}", "Accept": "application/json"},
+            params={"instrument_key": "NSE_INDEX|India VIX"}, timeout=5)
+        vix_data = vix_r.json()
+        if vix_data.get("status") == "success":
+            vix_spot = list(vix_data["data"].values())[0]["last_price"]
+            # Contango proxy: if VIX > 15 and atm_iv > vix_spot, sellers have edge
+            vix_basis = "CONTANGO" if atm_iv > vix_spot else "BACKWARDATION"
+        else:
+            vix_spot = 0; vix_basis = "UNKNOWN"
+    except:
+        vix_spot = 0; vix_basis = "UNKNOWN"
+
     details = {
         "atm_iv": round(atm_iv, 2), "ce_iv": round(ce_iv, 2), "pe_iv": round(pe_iv, 2),
+        "vix_spot": round(vix_spot, 2), "vix_basis": vix_basis,
         "pcr_vol": round(pcr_vol, 2), "pcr_oi": round(pcr_oi, 2),
         "iv_skew": round(iv_skew, 2),
         "ce_wall": ce_wall_val, "pe_wall": pe_wall_val, "max_pain": max_pain, "iv_rank": iv_rank,
@@ -577,6 +608,40 @@ def select_strikes(chain, regime, strategy):
             "bull_put": bull_put, "bear_call": bear_call,
             "net_credit": total_credit,
             "max_loss": round(SPREAD_WIDTH - total_credit, 2),
+        }
+
+    elif strategy == "Iron Butterfly":
+        # T018: Sell ATM straddle + buy OTM wings 150pts away
+        atm_key = min(oc.keys(), key=lambda x: abs(float(x) - spot))
+        atm_ce_ltp = oc[atm_key]["ce"].get("last_price", 0)
+        atm_pe_ltp = oc[atm_key]["pe"].get("last_price", 0)
+        atm_strike = float(atm_key)
+        straddle_credit = round(atm_ce_ltp + atm_pe_ltp, 2)
+
+        # Buy wings 150pts away
+        wing_width = 150
+        call_wing_key = min(oc.keys(), key=lambda x: abs(float(x) - (atm_strike + wing_width)))
+        put_wing_key  = min(oc.keys(), key=lambda x: abs(float(x) - (atm_strike - wing_width)))
+        call_wing_ltp = oc[call_wing_key]["ce"].get("last_price", 0)
+        put_wing_ltp  = oc[put_wing_key]["pe"].get("last_price", 0)
+        wings_cost = round(call_wing_ltp + put_wing_ltp, 2)
+        net_credit = round(straddle_credit - wings_cost, 2)
+
+        if net_credit <= 0: return None
+
+        return {
+            "type": "Iron Butterfly",
+            "atm_strike": atm_strike,
+            "call_short": {"strike": atm_strike, "ltp": atm_ce_ltp},
+            "put_short":  {"strike": atm_strike, "ltp": atm_pe_ltp},
+            "call_wing":  {"strike": float(call_wing_key), "ltp": call_wing_ltp},
+            "put_wing":   {"strike": float(put_wing_key),  "ltp": put_wing_ltp},
+            "net_credit": net_credit,
+            "max_loss": round(wing_width - net_credit, 2),
+            "call_short_strike": atm_strike,
+            "put_short_strike": atm_strike,
+            "call_credit": atm_ce_ltp,
+            "put_credit": atm_pe_ltp,
         }
     return None
 
@@ -901,7 +966,23 @@ def handle_cmd(text, chat_id):
         def leg_line(leg, side):
             return f"  {side} {int(leg['strike'])} {leg['option']} @ ₹{leg['ltp']:.1f} (IV {leg.get('iv', 0):.1f}%)"
 
-        if strategy == "Iron Condor":
+        if strategy == "Iron Butterfly":
+            ib = strikes
+            tg(f"🎯 <b>SriMhatre SIGNAL</b> | {'📝 PAPER' if PAPER else '🔴 LIVE'}\n"
+               f"{now_ist().strftime('%H:%M:%S')} | {target_expiry} (DTE {dte})\n\n"
+               f"Regime: <b>{regime}</b>\n"
+               f"Strategy: <b>🦋 Iron Butterfly</b> (low-range day)\n\n"
+               f"SELL {ib['atm_strike']:,.0f} CE @ ₹{ib['call_short']['ltp']:.2f}\n"
+               f"SELL {ib['atm_strike']:,.0f} PE @ ₹{ib['put_short']['ltp']:.2f}\n"
+               f"BUY  {ib['call_wing']['strike']:,.0f} CE @ ₹{ib['call_wing']['ltp']:.2f}\n"
+               f"BUY  {ib['put_wing']['strike']:,.0f} PE @ ₹{ib['put_wing']['ltp']:.2f}\n\n"
+               f"Net Credit: ₹{ib['net_credit']:.2f}/unit\n"
+               f"Qty: {qty} | Total: ₹{ib['net_credit']*qty:,.0f}\n\n"
+               f"Target (50%): ₹{ib['net_credit']*0.5:.2f} → +₹{ib['net_credit']*0.5*qty:,.0f}\n"
+               f"SL (2×): ₹{ib['net_credit']*2:.2f} → -₹{ib['net_credit']*2*qty:,.0f}\n\n"
+               f"Send /enter to execute or /skip to pass")
+
+        elif strategy == "Iron Condor":
             legs_msg = (f"📋 <b>Legs:</b>\n"
                         f"{leg_line(strikes['bear_call']['short'], 'SELL')}\n"
                         f"{leg_line(strikes['bear_call']['long'],  'BUY ')}\n"
@@ -961,7 +1042,23 @@ def handle_cmd(text, chat_id):
         net_credit = strikes["net_credit"]
         pfx        = "📝 PAPER" if PAPER else "🔴 LIVE"
 
-        if strategy == "Iron Condor":
+        if strategy == "Iron Butterfly":
+            ib = strikes
+            tg(f"🎯 <b>SriMhatre SIGNAL</b> | {'📝 PAPER' if PAPER else '🔴 LIVE'}\n"
+               f"{now_ist().strftime('%H:%M:%S')} | {target_expiry} (DTE {dte})\n\n"
+               f"Regime: <b>{regime}</b>\n"
+               f"Strategy: <b>🦋 Iron Butterfly</b> (low-range day)\n\n"
+               f"SELL {ib['atm_strike']:,.0f} CE @ ₹{ib['call_short']['ltp']:.2f}\n"
+               f"SELL {ib['atm_strike']:,.0f} PE @ ₹{ib['put_short']['ltp']:.2f}\n"
+               f"BUY  {ib['call_wing']['strike']:,.0f} CE @ ₹{ib['call_wing']['ltp']:.2f}\n"
+               f"BUY  {ib['put_wing']['strike']:,.0f} PE @ ₹{ib['put_wing']['ltp']:.2f}\n\n"
+               f"Net Credit: ₹{ib['net_credit']:.2f}/unit\n"
+               f"Qty: {qty} | Total: ₹{ib['net_credit']*qty:,.0f}\n\n"
+               f"Target (50%): ₹{ib['net_credit']*0.5:.2f} → +₹{ib['net_credit']*0.5*qty:,.0f}\n"
+               f"SL (2×): ₹{ib['net_credit']*2:.2f} → -₹{ib['net_credit']*2*qty:,.0f}\n\n"
+               f"Send /enter to execute or /skip to pass")
+
+        elif strategy == "Iron Condor":
             pos = {
                 "type": strategy, "expiry": target_exp, "qty": qty,
                 "net_credit": net_credit, "entry_time": n.strftime("%H:%M:%S"),
