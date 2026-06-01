@@ -558,7 +558,7 @@ def select_strikes(chain, regime, strategy):
                     "ltp": pe.get("last_price", 0), "iv": pe.get("implied_volatility", 0),
                     "oi": pe.get("oi", 0), "delta": delta})
         if not candidates: return None
-        short_strike = max(candidates, key=lambda x: x["oi"])
+        short_strike = min(candidates, key=lambda x: abs(x["delta"] - 0.20))
         long_val = short_strike["strike"] - SPREAD_WIDTH
         long_key = min(strikes, key=lambda x: abs(float(x) - long_val))
         long_pe  = oc[long_key]["pe"]
@@ -592,7 +592,7 @@ def select_strikes(chain, regime, strategy):
                     "ltp": ce.get("last_price", 0), "iv": ce.get("implied_volatility", 0),
                     "oi": ce.get("oi", 0), "delta": delta})
         if not candidates: return None
-        short_strike = max(candidates, key=lambda x: x["oi"])
+        short_strike = min(candidates, key=lambda x: abs(x["delta"] - 0.20))
         long_val = short_strike["strike"] + SPREAD_WIDTH
         long_key = min(strikes, key=lambda x: abs(float(x) - long_val))
         long_ce  = oc[long_key]["ce"]
