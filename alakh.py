@@ -68,8 +68,8 @@ SCORE_NORMAL       = 7
 SCORE_HIGH_IV      = 8
 SCORE_POST_TARGET  = 10
 
-LOTS_NORMAL        = 5
-LOTS_HIGH_IV       = 3
+LOTS_NORMAL        = 3
+LOTS_HIGH_IV       = 2
 LOT_SIZE           = 20
 
 DAILY_TARGET       = 2500
@@ -1350,13 +1350,8 @@ def monitor_trade():
         if current_prem <= sl:
             _stop_loss(entry, current_prem, qty, pnl, elapsed); return
         if current_prem >= entry + LOCK_PTS:
-            with TRADE_L:
-                TRADE["lock_achieved"] = True
-                TRADE["trail_sl"]      = entry
-            tg(f"🔒 <b>PROFIT LOCKED +₹{LOCK_PTS}/unit</b>\n"
-               f"SL → breakeven ₹{entry:.2f}\n"
-               f"Premium ₹{current_prem:.2f} | +₹{pnl:,.0f}\n"
-               f"Riding with structure trail...")
+            _take_profit(entry, current_prem, qty, pnl, elapsed)
+            return
     else:
         if current_prem < sl:
             with WS_LOCK:

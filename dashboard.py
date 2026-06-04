@@ -546,33 +546,206 @@ if tab == "dashboard":
     st.markdown("""<script>setTimeout(function(){window.location.reload();},30000);</script>""", unsafe_allow_html=True)
 
 # ── TOKENS ──
-elif tab == "tokens":
-    st.markdown('<div class="section-label">Token Refresh</div>', unsafe_allow_html=True)
-    st.markdown(f"""<div class="card">
-    <div style="font-size:13px;color:{SUBTEXT};line-height:2.2">
-        Kotak Neo - Auto via TOTP<br>
-        Groww - Auto via SECRET<br>
-        Dhan - Paste fresh token daily<br>
-        Upstox - Paste fresh token daily
-    </div></div>""", unsafe_allow_html=True)
-    dt=st.text_input("Dhan Token", placeholder="Paste Dhan token...", type="password", key="tok_dhan")
-    ut=st.text_input("Upstox Token", placeholder="Paste Upstox token...", type="password", key="tok_upstox")
-    if st.button("Save Tokens and Restart All Bots", use_container_width=True, key="tok_save"):
-        updated=[]
-        try:
-            if dt.strip():
-                subprocess.run(["sed","-i","/DHAN_ACCESS_TOKEN/d",ENV_PATH])
-                open(ENV_PATH,"a").write(f"\nDHAN_ACCESS_TOKEN={dt.strip()}\n")
-                updated.append("Dhan")
-            if ut.strip():
-                subprocess.run(["sed","-i","/UPSTOX_ACCESS_TOKEN/d",ENV_PATH])
-                open(ENV_PATH,"a").write(f"\nUPSTOX_ACCESS_TOKEN={ut.strip()}\n")
-                updated.append("Upstox")
-            if updated:
-                subprocess.run(["sudo","systemctl","restart","alakh","srimhatre","guha"])
-                st.success(f"Saved {', '.join(updated)} - Bots restarted!")
-            else: st.warning("Paste at least one token first")
-        except Exception as e: st.error(f"Error: {e}")
+elif tab == "journal":
+    import sqlite3 as _sq
+    from datetime import date as _date, timedelta as _td
+
+    JDB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal.db")
+
+    def jdb():
+        return _sq.connect(JDB)
+
+    def get_month_pnl(year, month):
+        con = jdb()
+        cur = con.cursor()
+        cur.execute("""SELECT date, account, gross, net, charges, trades, merit, overtrade, notes
+                       FROM daily_pnl WHERE strftime('%Y-%m', date)=?
+                       ORDER BY date DESC""", (f"{year:04d}-{month:02d}",))
+        rows = cur.fetchall()
+        con.close()
+        return rows
+
+    def get_totals(rows):
+        gross = sum(r[2] for r in rows)
+        net   = sum(r[3] for r in rows)
+        trades= sum(r[5] for r in rows)
+        merit = sum(r[6] for r in rows)
+        return gross, net, trades, merit
+
+    def upsert_entry(dt, account, gross, net, charges, trades, notes):
+        merit = 2 if trades <= 3 else 1 if trades <= 10 else 0
+        overtrade = 1 if trades > 10 else 0
+        con = jdb()
+        con.execute("""INSERT INTO daily_pnl(date,account,gross,net,charges,trades,notes,merit,overtrade,auto_gross,auto_trades)
+                       VALUES(?,?,?,?,?,?,?,?,?,0,0)
+                       ON CONFLICT(date,account) DO UPDATE SET
+                       gross=excluded.gross, net=excluded.net, charges=excluded.charges,
+                       trades=excluded.trades, notes=excluded.notes,
+                       merit=excluded.merit, overtrade=excluded.overtrade,
+                       updated_at=datetime('now')""",
+                    (dt, account, gross, net, charges, trades, notes, merit, overtrade))
+        con.commit(); con.close()
+
+    def get_outflow_total():
+        con = jdb()
+        cur = con.cursor()
+        cur.execute("SELECT SUM(amount) FROM outflow WHERE active=1")
+        r = cur.fetchone()[0] or 0
+        con.close()
+        return r
+
+    def get_config(key, default="0"):
+        con = jdb()
+        cur = con.cursor()
+        cur.execute("SELECT value FROM config WHERE key=?", (key,))
+        r = cur.fetchone()
+        con.close()
+        return r[0] if r else default
+
+    # ── State ──
+    now_ist   = datetime.now(IST)
+    cur_year  = now_ist.year
+    cur_month = now_ist.month
+    today_str = now_ist.strftime("%Y-%m-%d")
+
+    salary    = float(get_config("salary", "80000"))
+    outflow   = get_outflow_total()
+    trading_target = outflow - salary if outflow > salary else float(get_config("target_alakh","52000")) + float(get_config("target_srimhatre","26972")) + float(get_config("target_guha","8500"))
+
+    rows      = get_month_pnl(cur_year, cur_month)
+    gross_tot, net_tot, trades_tot, merit_tot = get_totals(rows)
+
+    # ── Header ──
+    st.markdown(f"""
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 16px">
+        <div>
+            <div style="font-family:Syne,sans-serif;font-size:20px;font-weight:800;color:{TEXT}">
+                📒 P&L Journal</div>
+            <div style="font-size:11px;color:{SUBTEXT};margin-top:2px">
+                {now_ist.strftime("%B %Y")} · {len(set(r[0] for r in rows))} trading days</div>
+        </div>
+        <div style="text-align:right">
+            <div style="font-size:10px;color:{SUBTEXT};text-transform:uppercase;letter-spacing:1px">All-time Net</div>
+            <div style="font-size:22px;font-weight:800;color:{'#22c55e' if net_tot>=0 else '#ef4444'}">
+                ₹{net_tot:+,.0f}</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Monthly summary cards ──
+    c1,c2,c3,c4 = st.columns(4)
+    for col, label, val, color in [
+        (c1, "GROSS",  f"₹{gross_tot:+,.0f}", "#22c55e" if gross_tot>=0 else "#ef4444"),
+        (c2, "NET",    f"₹{net_tot:+,.0f}",   "#22c55e" if net_tot>=0 else "#ef4444"),
+        (c3, "TRADES", str(trades_tot),        TEXT),
+        (c4, "MERIT",  f"⭐ {merit_tot}",       "#f97316"),
+    ]:
+        with col:
+            st.markdown(f"""<div class="card" style="text-align:center;padding:12px 8px">
+            <div style="font-size:9px;font-weight:700;color:{SUBTEXT};letter-spacing:1px;text-transform:uppercase">{label}</div>
+            <div style="font-size:18px;font-weight:800;color:{color};margin-top:4px">{val}</div>
+            </div>""", unsafe_allow_html=True)
+
+    # ── Monthly Outflow Chase ──
+    pct = min(net_tot / trading_target * 100, 100) if trading_target > 0 else 0
+    bar_color = "#22c55e" if pct >= 80 else "#f97316" if pct >= 40 else "#ef4444"
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:16px;
+                padding:16px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <div style="font-size:13px;font-weight:700;color:#fff">Monthly Outflow Chase</div>
+            <div style="font-size:12px;color:{bar_color}">{pct:.0f}% cleared →</div>
+        </div>
+        <div style="font-size:28px;font-weight:800;color:#fff;margin-bottom:8px">
+            ₹{net_tot:,.0f} <span style="font-size:14px;color:rgba(255,255,255,0.4)">/ ₹{trading_target:,.0f}</span></div>
+        <div style="background:rgba(255,255,255,0.1);border-radius:100px;height:6px;margin-bottom:8px">
+            <div style="width:{pct:.1f}%;background:{bar_color};height:6px;border-radius:100px;transition:width .3s"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+            <div style="font-size:11px;color:rgba(255,255,255,0.4)">Remaining: ₹{max(trading_target-net_tot,0):,.0f}</div>
+            <div style="font-size:11px;color:{bar_color}">Trading: ₹{net_tot:,.0f}</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Add Entry ──
+    with st.expander("➕ Add / Edit Entry", expanded=False):
+        ACCOUNTS = ["Dhan", "Kotak Neo", "Groww", "Flattrade"]
+        col1, col2 = st.columns(2)
+        with col1:
+            j_date    = st.date_input("Date", value=_date.today(), key="j_date")
+            j_account = st.selectbox("Account", ACCOUNTS, key="j_account")
+            j_gross   = st.number_input("Gross P&L (₹)", value=0.0, step=100.0, key="j_gross")
+        with col2:
+            j_net     = st.number_input("Net P&L (₹)", value=0.0, step=100.0, key="j_net")
+            j_charges = st.number_input("Charges (₹)", value=0.0, step=10.0, key="j_charges")
+            j_trades  = st.number_input("No. of Trades", value=0, step=1, key="j_trades")
+        j_notes = st.text_input("Notes (optional)", key="j_notes", placeholder="Setup, mistakes, observations...")
+
+        # Trade discipline feedback
+        if j_trades > 0:
+            if j_trades > 10:
+                st.error(f"⚠️ OVERTRADE ALERT: {j_trades} trades! You need to control this habit. Max recommended: 10.")
+            elif j_trades <= 3:
+                st.success(f"🏆 Excellent! Only {j_trades} trades — discipline badge earned! +2 merit points.")
+            else:
+                st.info(f"✅ Good control: {j_trades} trades. +1 merit point.")
+
+        if st.button("💾 Save Entry", key="j_save", use_container_width=True):
+            upsert_entry(str(j_date), j_account, j_gross, j_net, j_charges, int(j_trades), j_notes)
+            st.success("Saved!"); st.rerun()
+
+    # ── AI Coach Report ──
+    con_ai = jdb()
+    cur_ai = con_ai.cursor()
+    cur_ai.execute("SELECT report, created_at FROM ai_reports WHERE date=? ORDER BY id DESC LIMIT 1", (today_str,))
+    ai_row = cur_ai.fetchone()
+    con_ai.close()
+    if ai_row:
+        report_text, report_time = ai_row
+        st.markdown(f"""<div style="background:linear-gradient(135deg,#0f1f0f,#0a1a0a);border:1px solid #22c55e33;border-radius:16px;padding:16px;margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:Syne,sans-serif;font-size:14px;font-weight:800;color:#22c55e">🤖 AI Trade Coach</div><div style="font-size:10px;color:{SUBTEXT}">{report_time[:16]}</div></div><div style="font-size:12px;color:{TEXT};line-height:1.8;white-space:pre-wrap">{report_text}</div></div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:16px;padding:16px;margin-bottom:12px;text-align:center"><div style="font-size:20px;margin-bottom:6px">🤖</div><div style="font-size:12px;color:{SUBTEXT}">AI Coach report generates at 3:30 PM daily<br>or tap below to run now</div></div>""", unsafe_allow_html=True)
+    if st.button("🔄 Run AI Analysis Now", key="j_ai_refresh", use_container_width=True):
+        import subprocess
+        subprocess.Popen(["/home/balukasagatta1709/mahakaal/venv/bin/python3", "/home/balukasagatta1709/mahakaal/journal_fetcher.py", "ondemand"])
+        st.info("Analysis running... refresh in 30 seconds.")
+    # ── History ──
+    st.markdown(f"""<div style="font-size:11px;font-weight:700;color:{SUBTEXT};text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px">This Month</div>""", unsafe_allow_html=True)
+
+    if not rows:
+        st.markdown(f"""<div class="card" style="text-align:center;padding:32px">
+        <div style="font-size:32px;margin-bottom:8px">📭</div>
+        <div style="color:{SUBTEXT};font-size:13px">No entries yet.<br>Bots auto-fill at 3:30 PM.</div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        # Group by date
+        from itertools import groupby as _gb
+        date_rows = {}
+        for r in rows:
+            date_rows.setdefault(r[0], []).append(r)
+
+        for dt, day_rows in date_rows.items():
+            day_gross  = sum(r[2] for r in day_rows)
+            day_net    = sum(r[3] for r in day_rows)
+            day_trades = sum(r[5] for r in day_rows)
+            day_merit  = max(r[6] for r in day_rows)
+            day_over   = any(r[7] for r in day_rows)
+            clr = "#22c55e" if day_net >= 0 else "#ef4444"
+            badge = "⚠️" if day_over else "🏆" if day_merit == 2 else "✅"
+
+            st.markdown(f"""
+            <div class="card" style="margin-bottom:8px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div>
+                        <div style="font-size:13px;font-weight:700;color:{TEXT}">{badge} {dt}</div>
+                        <div style="font-size:11px;color:{SUBTEXT}">{day_trades} trades · {len(day_rows)} accounts</div>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:16px;font-weight:800;color:{clr}">₹{day_net:+,.0f}</div>
+                        <div style="font-size:10px;color:{SUBTEXT}">Gross ₹{day_gross:+,.0f}</div>
+                    </div>
+                </div>
+                {"".join(f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid {BORDER}"><span style="font-size:11px;color:{SUBTEXT}">{r[1]}</span><span style="font-size:11px;color:{"#22c55e" if r[3]>=0 else "#ef4444"};font-weight:600">₹{r[3]:+,.0f}</span></div>' for r in day_rows)}
+            </div>""", unsafe_allow_html=True)
 
 # ── SETTINGS ──
 elif tab == "settings":
@@ -728,14 +901,14 @@ st.markdown(f"""
 <style>
     [data-testid="stSidebar"] {{ display:none !important; }}
     [data-testid="block-container"] {{ padding-bottom:72px !important; }}
-    .st-key-nav_dashboard, .st-key-nav_tokens, .st-key-nav_pro, .st-key-nav_settings {{
+    .st-key-nav_dashboard, .st-key-nav_journal, .st-key-nav_pro, .st-key-nav_settings {{
         position:fixed !important; bottom:0 !important; z-index:99999 !important; height:60px !important;
     }}
     .st-key-nav_dashboard {{ left:0 !important; width:25vw !important; }}
-    .st-key-nav_tokens    {{ left:25vw !important; width:25vw !important; }}
-    .st-key-nav_pro       {{ left:50vw !important; width:25vw !important; }}
+    .st-key-nav_pro       {{ left:25vw !important; width:25vw !important; }}
+    .st-key-nav_journal   {{ left:50vw !important; width:25vw !important; }}
     .st-key-nav_settings  {{ left:75vw !important; width:25vw !important; }}
-    .st-key-nav_dashboard button, .st-key-nav_tokens button,
+    .st-key-nav_dashboard button, .st-key-nav_journal button,
     .st-key-nav_pro button, .st-key-nav_settings button {{
         background:{TAB_BG} !important; border:none !important;
         border-top:1px solid {TAB_BD} !important;
@@ -754,9 +927,9 @@ st.markdown(f"""
 
 if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
     st.session_state.tab = "dashboard"; st.rerun()
-if st.button("🔑 Tokens", key="nav_tokens", use_container_width=True):
-    st.session_state.tab = "tokens"; st.rerun()
 if st.button("👑 Live Algo", key="nav_pro", use_container_width=True):
     st.session_state.tab = "pro"; st.rerun()
+if st.button("📒 Journal", key="nav_journal", use_container_width=True):
+    st.session_state.tab = "journal"; st.rerun()
 if st.button("⚙️ Settings", key="nav_settings", use_container_width=True):
     st.session_state.tab = "settings"; st.rerun()
