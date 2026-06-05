@@ -1,692 +1,478 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useCallback } from "react"
 
 const API = "https://mtutrade.in/api"
-
-// ── Constants from real Upstox data ───────────────────────────────────────────
 const INSTRUMENTS = {
-  SENSEX: {
-    key:        "BSE_INDEX|SENSEX",
-    fo_segment: "BSE_FO",
-    lot:        20,
-    step:       100,
-    expiry_day: "Thursday",
-    tick:       5,
-  },
-  NIFTY: {
-    key:        "NSE_INDEX|Nifty 50",
-    fo_segment: "NSE_FO",
-    lot:        65,
-    step:       50,
-    expiry_day: "Tuesday",
-    tick:       0.05,
-  },
+  SENSEX: { key: "BSE_INDEX|SENSEX", lot: 20, step: 100, expiry_day: "Thursday" },
+  NIFTY:  { key: "NSE_INDEX|Nifty 50", lot: 65, step: 50, expiry_day: "Tuesday" },
 }
+const BROKERS = ["Upstox","Dhan","Kotak Neo","Zerodha","Angel","Fyers"]
 
-const BROKERS = ["Upstox", "Dhan", "Kotak Neo", "Zerodha", "Angel", "Fyers"]
-
-// ── Colors ─────────────────────────────────────────────────────────────────────
-const C = {
-  bg:     "#F5F4F0", white: "#FFFFFF", ink: "#1A1916",
-  muted:  "#9B9689", border: "#E2E0D8", orange: "#E8540A",
-  green:  "#1A7F4B", red: "#C0392B", amber: "#B45309",
-  bgMid:  "#ECEAE4", greenBg: "#D1FAE5", redBg: "#FEE2E2",
-}
-
-const mono = { fontFamily: "'IBM Plex Mono', monospace" }
-const sans = { fontFamily: "'IBM Plex Sans', sans-serif" }
-
-// ── API helpers ────────────────────────────────────────────────────────────────
-async function apiFetch(path, opts = {}) {
+async function api(path, opts={}) {
   try {
-    const r = await fetch(`${API}${path}`, {
-      headers: { "Content-Type": "application/json" }, ...opts,
-    })
+    const r = await fetch(API+path, { headers:{"Content-Type":"application/json"}, ...opts })
     return r.json()
-  } catch (e) {
-    return { error: e.message }
-  }
+  } catch(e) { return {error:e.message} }
 }
 
-async function upstoxGet(path) {
-  const r = await apiFetch(`/vajra/upstox${path}`)
-  return r
-}
-
-// ── Small components ───────────────────────────────────────────────────────────
-function Badge({ children, color = "gray", sm }) {
-  const map = {
-    green:  [C.greenBg, "#065F46"],
-    red:    [C.redBg,   "#991B1B"],
-    amber:  ["#FEF3C7", "#92400E"],
-    blue:   ["#DBEAFE", "#1E40AF"],
-    gray:   ["#F3F2EE", "#5C5A54"],
-    orange: ["#FFF1E6", "#C2410C"],
-  }
-  const [bg, fg] = map[color] || map.gray
-  return (
-    <span style={{ ...mono, display: "inline-flex", alignItems: "center",
-      padding: sm ? "2px 6px" : "3px 8px", borderRadius: 4,
-      background: bg, color: fg, fontSize: sm ? 9 : 10, fontWeight: 600, letterSpacing: 0.5 }}>
-      {children}
-    </span>
-  )
-}
-
-function Btn({ children, onClick, color = "default", full, sm, disabled }) {
-  const styles = {
-    default: { bg: C.white,  fg: C.ink,   bd: C.border },
-    green:   { bg: C.green,  fg: "#fff",  bd: C.green  },
-    red:     { bg: C.red,    fg: "#fff",  bd: C.red    },
-    orange:  { bg: C.orange, fg: "#fff",  bd: C.orange },
-    ghost:   { bg: "transparent", fg: C.muted, bd: C.border },
-    sell:    { bg: C.red,    fg: "#fff",  bd: C.red    },
-    buy:     { bg: C.green,  fg: "#fff",  bd: C.green  },
-  }
-  const { bg, fg, bd } = styles[color] || styles.default
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      ...sans, background: bg, color: fg, border: `1.5px solid ${bd}`,
-      borderRadius: 6, padding: sm ? "6px 10px" : "9px 14px",
-      fontWeight: 700, fontSize: sm ? 11 : 13,
-      cursor: disabled ? "not-allowed" : "pointer",
-      opacity: disabled ? 0.5 : 1,
-      width: full ? "100%" : "auto", transition: "all .1s",
-      whiteSpace: "nowrap",
-    }}>
-      {children}
-    </button>
-  )
-}
-
-function Select({ value, onChange, options, label }) {
-  return (
-    <div>
-      {label && <div style={{ ...mono, fontSize: 8, letterSpacing: 1.5, textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>{label}</div>}
-      <select value={value} onChange={e => onChange(e.target.value)} style={{
-        ...mono, fontSize: 12, fontWeight: 600, color: C.ink,
-        border: `1.5px solid ${C.border}`, borderRadius: 6,
-        padding: "6px 8px", background: C.white, width: "100%", cursor: "pointer",
-      }}>
-        {options.map(o => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
-      </select>
-    </div>
-  )
-}
-
-function NumInput({ value, onChange, label, min = 1 }) {
-  return (
-    <div>
-      {label && <div style={{ ...mono, fontSize: 8, letterSpacing: 1.5, textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>{label}</div>}
-      <div style={{ display: "flex", alignItems: "center", border: `1.5px solid ${C.border}`, borderRadius: 6, background: C.white, overflow: "hidden" }}>
-        <button onClick={() => onChange(Math.max(min, value - 1))} style={{ ...mono, padding: "6px 10px", background: "none", border: "none", cursor: "pointer", color: C.ink, fontWeight: 700 }}>−</button>
-        <span style={{ ...mono, flex: 1, textAlign: "center", fontSize: 13, fontWeight: 700, color: C.ink }}>{value}</span>
-        <button onClick={() => onChange(value + 1)} style={{ ...mono, padding: "6px 10px", background: "none", border: "none", cursor: "pointer", color: C.ink, fontWeight: 700 }}>+</button>
-      </div>
-    </div>
-  )
-}
-
-function ProgBar({ pct }) {
-  const c = pct < 50 ? C.green : pct < 80 ? C.amber : C.red
-  return (
-    <div style={{ background: C.bgMid, borderRadius: 100, height: 4, overflow: "hidden" }}>
-      <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: c, borderRadius: 100, transition: "width .3s" }} />
-    </div>
-  )
-}
-
-// ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab,       setTab]       = useState("trade")
-  const [broker,    setBroker]    = useState("")
-  const [symbol,    setSymbol]    = useState("SENSEX")
-  const [expiries,  setExpiries]  = useState([])
-  const [expiry,    setExpiry]    = useState("")
-  const [ceStrike,  setCeStrike]  = useState(null)
-  const [peStrike,  setPeStrike]  = useState(null)
-  const [strikes,   setStrikes]   = useState([])
-  const [qty,       setQty]       = useState(1)
-  const [orderType, setOrderType] = useState("Market Protection")
-  const [slPts,     setSlPts]     = useState(20)
-  const [tgtPts,    setTgtPts]    = useState(20)
-
-  // Live prices
-  const [sensex,    setSensex]    = useState(null)
-  const [nifty,     setNifty]     = useState(null)
-  const [vix,       setVix]       = useState(null)
-  const [ceLtp,     setCeLtp]     = useState(null)
-  const [peLtp,     setPeLtp]     = useState(null)
-  const [ceHiLo,    setCeHiLo]    = useState({ h: 0, l: 0 })
-  const [peHiLo,    setPeHiLo]    = useState({ h: 0, l: 0 })
-
-  // PRAGNYA
-  const [pragnya,   setPragnya]   = useState(null)
+  const [broker, setBroker]     = useState(()=>localStorage.getItem("mtu_broker")||"")
+  const [screen, setScreen]     = useState(()=>localStorage.getItem("mtu_broker")?"main":"broker")
+  const [symbol, setSymbol]     = useState("SENSEX")
+  const [expiries, setExpiries] = useState([])
+  const [expiry, setExpiry]     = useState("")
+  const [strikes, setStrikes]   = useState([])
+  const [ceStrike, setCeStrike] = useState("")
+  const [peStrike, setPeStrike] = useState("")
+  const [ceLtp, setCeLtp]       = useState(0)
+  const [peLtp, setPeLtp]       = useState(0)
+  const [qty, setQty]           = useState(1)
+  const [slPts, setSlPts]       = useState(20)
+  const [tgtPts, setTgtPts]     = useState(20)
+  const [market, setMarket]     = useState({sensex:null,nifty:null,vix:null})
+  const [pragnya, setPragnya]   = useState(null)
   const [positions, setPositions] = useState([])
-  const [msg,       setMsg]       = useState(null)
-
-  // Overlays
-  const [showBroker,  setShowBroker]  = useState(true)
-  const [showGita,    setShowGita]    = useState(false)
-  const [gitaReason,  setGitaReason]  = useState("")
+  const [tab, setTab]           = useState("positions")
+  const [toast, setToast]       = useState(null)
+  const [gitaMsg, setGitaMsg]   = useState(null)
 
   const instr = INSTRUMENTS[symbol]
 
-  const flash = (text, type = "ok") => {
-    setMsg({ text, type })
-    setTimeout(() => setMsg(null), 3000)
+  function showToast(msg, ok=true) {
+    setToast({msg, ok})
+    setTimeout(()=>setToast(null), 3000)
   }
 
-  // ── Fetch expiries ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!broker) return
-    async function load() {
-      const r = await apiFetch(`/sutra/expiries?index=${symbol}`)
-      if (r.expiries?.length) {
-        const weekly = r.expiries.slice(0, 8)
-        setExpiries(weekly)
-        setExpiry(weekly[0])
-      }
-    }
-    load()
-  }, [symbol, broker])
-
-  // ── Fetch option chain when expiry changes ────────────────────────────────
-  useEffect(() => {
-    if (!expiry || !broker) return
-    async function load() {
-      const r = await apiFetch(`/sutra/chain?index=${symbol}&expiry=${expiry}`)
-      if (r.strikes?.length) {
-        setStrikes(r.strikes)
-        const atm = r.atm
-        const atmRow = r.strikes.find(s => s.is_atm) || r.strikes[Math.floor(r.strikes.length / 2)]
-        // CE: 1 step OTM above ATM, PE: 1 step OTM below ATM
-        const ceRow = r.strikes.find(s => s.strike === atm + instr.step) || atmRow
-        const peRow = r.strikes.find(s => s.strike === atm - instr.step) || atmRow
-        setCeStrike(ceRow?.strike || atm)
-        setPeStrike(peRow?.strike || atm)
-      }
-    }
-    load()
-  }, [expiry, symbol, broker])
-
-  // ── Live price poll ───────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!broker) return
-    async function poll() {
-      const r = await apiFetch("/vajra/market")
-      if (r.sensex?.ltp) setSensex(r.sensex)
-      if (r.vix?.ltp)    setVix(r.vix.ltp)
-      // Fetch Nifty separately
-      const nr = await apiFetch("/sutra/chain?index=NIFTY&expiry=" + (expiries[0] || ""))
-      if (nr.spot) setNifty({ ltp: nr.spot })
+  // Market poll
+  useEffect(()=>{
+    if(screen!=="main") return
+    const poll = async()=>{
+      const r = await api("/vajra/market")
+      if(r.sensex) setMarket({sensex:r.sensex, nifty:r.nifty, vix:r.vix?.ltp})
     }
     poll()
     const t = setInterval(poll, 5000)
-    return () => clearInterval(t)
-  }, [broker, expiries])
+    return ()=>clearInterval(t)
+  },[screen])
 
-  // ── Poll option LTPs ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!expiry || !ceStrike || !peStrike || !broker) return
-    async function pollOptions() {
-      const r = await apiFetch(`/sutra/chain?index=${symbol}&expiry=${expiry}`)
-      if (r.strikes) {
-        const ce = r.strikes.find(s => s.strike === ceStrike)
-        const pe = r.strikes.find(s => s.strike === peStrike)
-        if (ce) { setCeLtp(ce.ce.ltp); setCeHiLo({ h: ce.ce.ltp * 1.5, l: ce.ce.ltp * 0.5 }) }
-        if (pe) { setPeLtp(pe.pe.ltp); setPeHiLo({ h: pe.pe.ltp * 1.5, l: pe.pe.ltp * 0.5 }) }
-      }
-    }
-    pollOptions()
-    const t = setInterval(pollOptions, 3000)
-    return () => clearInterval(t)
-  }, [expiry, ceStrike, peStrike, symbol, broker])
-
-  // ── Fetch PRAGNYA state ───────────────────────────────────────────────────
-  useEffect(() => {
-    if (!broker) return
-    async function loadPragnya() {
-      const r = await apiFetch("/vajra/state")
-      if (r.state) setPragnya(r)
-      if (r.trades) setPositions(r.trades.filter(t => t.status === "OPEN"))
-    }
-    loadPragnya()
-    const t = setInterval(loadPragnya, 10000)
-    return () => clearInterval(t)
-  }, [broker])
-
-  // ── Execute order ─────────────────────────────────────────────────────────
-  async function execute(type) {
-    if (!broker) { flash("Select broker first", "err"); return }
-    const strike = type.includes("Call") ? ceStrike : peStrike
-    const action = type.includes("Sell") ? "SELL" : "BUY"
-    const optType = type.includes("Call") ? "CE" : "PE"
-    const ltp     = type.includes("Call") ? ceLtp : peLtp
-    const instrument = `${symbol}${strike}${optType}`
-
-    const r = await apiFetch("/vajra/trade/open", {
-      method: "POST",
-      body: JSON.stringify({
-        instrument, direction: action,
-        entry: ltp, sl: action === "SELL" ? ltp + slPts : ltp - slPts,
-        target: action === "SELL" ? ltp - tgtPts : ltp + tgtPts,
-        lots: qty, strategy: `${action} ${optType}`,
-      }),
+  // Expiries
+  useEffect(()=>{
+    if(screen!=="main") return
+    api(`/sutra/expiries?index=${symbol}`).then(r=>{
+      if(r.expiries?.length) { setExpiries(r.expiries); setExpiry(r.expiries[0]) }
     })
-    if (r.status === "ok") {
-      flash(`✓ ${type} @ ₹${ltp} | ${qty} lot${qty > 1 ? "s" : ""}`)
-      const pr = await apiFetch("/vajra/state")
-      if (pr.trades) setPositions(pr.trades.filter(t => t.status === "OPEN"))
+  },[symbol, screen])
+
+  // Chain
+  useEffect(()=>{
+    if(!expiry || screen!=="main") return
+    api(`/sutra/chain?index=${symbol}&expiry=${expiry}`).then(r=>{
+      if(!r.strikes) return
+      setStrikes(r.strikes)
+      const atm = r.atm
+      const valid = r.strikes.filter(s=>s.ce.ltp>0&&s.pe.ltp>0)
+      const pool = valid.length>0?valid:r.strikes
+      const ce = pool.find(s=>Number(s.strike)>=atm)||pool[Math.floor(pool.length/2)]
+      const pe = [...pool].reverse().find(s=>Number(s.strike)<=atm)||pool[Math.floor(pool.length/2)]
+      setCeStrike(String(ce.strike))
+      setPeStrike(String(pe.strike))
+    })
+  },[expiry, symbol, screen])
+
+  // Option LTP poll
+  useEffect(()=>{
+    if(!expiry||!ceStrike||!peStrike||screen!=="main") return
+    const poll = async()=>{
+      const r = await api(`/sutra/chain?index=${symbol}&expiry=${expiry}`)
+      if(!r.strikes) return
+      const ce = r.strikes.find(s=>String(s.strike)===String(ceStrike))
+      const pe = r.strikes.find(s=>String(s.strike)===String(peStrike))
+      if(ce) setCeLtp(ce.ce.ltp)
+      if(pe) setPeLtp(pe.pe.ltp)
+    }
+    poll()
+    const t = setInterval(poll, 3000)
+    return ()=>clearInterval(t)
+  },[expiry,ceStrike,peStrike,symbol,screen])
+
+  // PRAGNYA
+  useEffect(()=>{
+    if(screen!=="main") return
+    const poll = async()=>{
+      const r = await api("/vajra/state")
+      if(r.state) setPragnya(r)
+      if(r.trades) setPositions(r.trades.filter(t=>t.status==="OPEN"))
+    }
+    poll()
+    const t = setInterval(poll, 10000)
+    return ()=>clearInterval(t)
+  },[screen])
+
+  function selectBroker(b) {
+    setBroker(b)
+    localStorage.setItem("mtu_broker", b)
+    setScreen("main")
+  }
+
+  async function execute(type) {
+    const isCall = type.includes("Call")
+    const ltp = isCall ? ceLtp : peLtp
+    const strike = isCall ? ceStrike : peStrike
+    const action = type.includes("Sell") ? "SELL" : "BUY"
+    const optType = isCall ? "CE" : "PE"
+
+    if(!ltp && ltp!==0) { showToast("Price not available", false); return }
+    if(!strike) { showToast("Strike not selected", false); return }
+
+    const r = await api("/vajra/trade/open", {
+      method:"POST",
+      body: JSON.stringify({
+        instrument:`${symbol}${strike}${optType}`,
+        direction:action, entry:ltp||1,
+        sl: action==="SELL" ? (ltp||1)+slPts : (ltp||1)-slPts,
+        target: action==="SELL" ? (ltp||1)-tgtPts : (ltp||1)+tgtPts,
+        lots:qty, strategy:`${action} ${optType}`
+      })
+    })
+    if(r.status==="ok") {
+      showToast(`✓ ${type} @ ₹${ltp} · ${qty}L`)
+      const pr = await api("/vajra/state")
+      if(pr.trades) setPositions(pr.trades.filter(t=>t.status==="OPEN"))
+      setPragnya(pr)
     } else {
-      flash(r.detail || "Order failed", "err")
-      if (r.detail?.includes("locked") || r.detail?.includes("Cannot")) {
-        setGitaReason(r.detail)
-        setShowGita(true)
+      const msg = r.detail || "Failed"
+      showToast(msg, false)
+      if(msg.toLowerCase().includes("lock")||msg.toLowerCase().includes("cannot")) {
+        setGitaMsg(msg)
       }
     }
   }
 
-  async function closePosition(tradeId, exitPrice, reason) {
-    const r = await apiFetch("/vajra/trade/close", {
-      method: "POST",
-      body: JSON.stringify({ trade_id: tradeId, exit_price: exitPrice, exit_reason: reason }),
+  async function closePos(id, exitPrice, reason) {
+    const r = await api("/vajra/trade/close", {
+      method:"POST",
+      body:JSON.stringify({trade_id:id, exit_price:exitPrice||1, exit_reason:reason})
     })
-    if (r.status === "ok") {
-      flash(`Closed: ${r.pnl >= 0 ? "+" : ""}₹${r.pnl?.toFixed(0)}`)
-      const pr = await apiFetch("/vajra/state")
-      if (pr.trades) setPositions(pr.trades.filter(t => t.status === "OPEN"))
+    if(r.status==="ok") {
+      showToast(`Closed: ${r.pnl>=0?"+":""}₹${Math.round(r.pnl||0)}`)
+      const pr = await api("/vajra/state")
+      if(pr.trades) setPositions(pr.trades.filter(t=>t.status==="OPEN"))
       setPragnya(pr)
     }
   }
 
-  async function killSwitch() {
-    await apiFetch("/vajra/kill", { method: "POST" })
-    setGitaReason("Kill switch activated")
-    setShowGita(true)
-    const pr = await apiFetch("/vajra/state")
-    setPragnya(pr)
-  }
+  const st = pragnya?.state||{}
+  const cfg = pragnya?.cfg||{}
+  const quote = pragnya?.quote||{}
+  const dscore = st.discipline_score||100
+  const dayPnl = st.daily_pnl||0
+  const sensexLtp = market.sensex?.ltp
+  const sensexChg = market.sensex?.change||0
+  const sensexPct = market.sensex?.pct||0
+  const niftyLtp = market.nifty?.ltp
+  const now = new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false})
 
-  const indexLtp   = symbol === "SENSEX" ? sensex?.ltp : nifty?.ltp
-  const indexClose = symbol === "SENSEX" ? sensex?.close : 0
-  const indexChg   = indexLtp && indexClose ? indexLtp - indexClose : sensex?.change || 0
-  const indexPct   = indexLtp && indexClose ? ((indexChg / indexClose) * 100) : sensex?.pct || 0
-
-  const st      = pragnya?.state || {}
-  const cfg     = pragnya?.cfg   || {}
-  const dscore  = st.discipline_score || 100
-  const dayPnl  = st.daily_pnl || 0
-  const quote   = pragnya?.quote || {}
-
-  const now = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
-
-  // ── BROKER SELECTOR OVERLAY ───────────────────────────────────────────────
-  if (showBroker) return (
-    <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 32, width: "100%", maxWidth: 380 }}>
-        <div style={{ ...mono, fontSize: 20, fontWeight: 700, color: C.ink, marginBottom: 4 }}>
-          ⚡ <span style={{ color: C.orange }}>VAJRA</span>
-        </div>
-        <div style={{ ...mono, fontSize: 9, color: C.muted, letterSpacing: 2, textTransform: "uppercase", marginBottom: 24 }}>
-          Scalping Terminal · Select Broker
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 24 }}>
-          {BROKERS.map(b => (
-            <button key={b} onClick={() => setBroker(b)} style={{
-              ...sans, padding: "12px", borderRadius: 8, fontWeight: 600, fontSize: 13,
-              border: `1.5px solid ${broker === b ? C.orange : C.border}`,
-              background: broker === b ? "#FFF1E6" : C.white,
-              color: broker === b ? C.orange : C.ink, cursor: "pointer",
-            }}>{b}</button>
+  // ── BROKER SCREEN ─────────────────────────────────────────────────────────
+  if(screen==="broker") return (
+    <div style={{minHeight:"100vh",background:"#F5F4F0",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'IBM Plex Sans',sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:14,padding:28,width:"100%",maxWidth:360,border:"1px solid #E2E0D8"}}>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:22,fontWeight:700,color:"#1A1916",marginBottom:4}}>⚡ <span style={{color:"#E8540A"}}>VAJRA</span></div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",letterSpacing:2,textTransform:"uppercase",marginBottom:20}}>Options Scalping Terminal</div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"#9B9689",marginBottom:12,letterSpacing:1,textTransform:"uppercase"}}>Select Your Broker</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+          {BROKERS.map(b=>(
+            <button key={b} onClick={()=>selectBroker(b)}
+              style={{padding:"14px 10px",borderRadius:8,border:`2px solid ${broker===b?"#E8540A":"#E2E0D8"}`,
+                background:broker===b?"#FFF1E6":"#fff",color:broker===b?"#E8540A":"#1A1916",
+                fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:600,fontSize:14,cursor:"pointer",
+                WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+              {b}
+            </button>
           ))}
         </div>
-        {/* Gita quote */}
-        <div style={{ background: C.bg, borderRadius: 8, padding: 14, marginBottom: 20 }}>
-          <div style={{ fontSize: 11, color: "#3D3B35", fontStyle: "italic", lineHeight: 1.6 }}>
-            "{quote.text || "Perform your duty equipoised, abandoning all attachment."}"
-          </div>
-          <div style={{ ...mono, fontSize: 9, color: C.muted, marginTop: 6, letterSpacing: 1 }}>
-            — {quote.src || "Bhagavad Gita 2.48"}
-          </div>
+        <div style={{background:"#F5F4F0",borderRadius:8,padding:14}}>
+          <div style={{fontSize:11,color:"#3D3B35",fontStyle:"italic",lineHeight:1.6}}>"{quote.text||"Perform your duty equipoised, abandoning all attachment."}"</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginTop:6}}>— {quote.src||"Bhagavad Gita 2.48"}</div>
         </div>
-        <Btn full color="orange" onClick={() => { if (broker) setShowBroker(false); else flash("Select a broker", "err") }}>
-          Continue with {broker || "broker"} →
-        </Btn>
       </div>
     </div>
   )
 
-  // ── GITA OVERLAY (kill / lock) ─────────────────────────────────────────────
-  if (showGita) return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(245,244,240,0.97)", zIndex: 99999,
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 32 }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🕉️</div>
-      <div style={{ ...mono, fontSize: 20, fontWeight: 700, color: C.red, marginBottom: 8 }}>PRAGNYA ACTIVATED</div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 28, textAlign: "center" }}>{gitaReason}</div>
-      <div style={{ background: C.bg, borderRadius: 8, padding: 16, maxWidth: 380, marginBottom: 24 }}>
-        <div style={{ fontSize: 12, color: "#3D3B35", fontStyle: "italic", lineHeight: 1.6 }}>"{quote.text}"</div>
-        <div style={{ ...mono, fontSize: 9, color: C.muted, marginTop: 6, letterSpacing: 1 }}>— {quote.src}</div>
+  // ── GITA OVERLAY ──────────────────────────────────────────────────────────
+  if(gitaMsg) return (
+    <div style={{position:"fixed",inset:0,background:"rgba(245,244,240,0.97)",zIndex:99999,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,fontFamily:"'IBM Plex Sans',sans-serif"}}>
+      <div style={{fontSize:48,marginBottom:16}}>🕉️</div>
+      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:18,fontWeight:700,color:"#C0392B",marginBottom:8}}>PRAGNYA ACTIVATED</div>
+      <div style={{fontSize:13,color:"#9B9689",marginBottom:24,textAlign:"center",maxWidth:300}}>{gitaMsg}</div>
+      <div style={{background:"#F5F4F0",borderRadius:8,padding:16,maxWidth:340,marginBottom:24}}>
+        <div style={{fontSize:12,color:"#3D3B35",fontStyle:"italic",lineHeight:1.6}}>"{quote.text}"</div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginTop:6}}>— {quote.src}</div>
       </div>
-      <Btn onClick={() => setShowGita(false)} color="ghost">Close</Btn>
+      <button onClick={()=>setGitaMsg(null)}
+        style={{padding:"10px 28px",borderRadius:8,border:"1.5px solid #E2E0D8",background:"#fff",color:"#9B9689",fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:600,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+        Dismiss
+      </button>
     </div>
   )
 
-  // ── MAIN TERMINAL ──────────────────────────────────────────────────────────
+  // ── MAIN TERMINAL ─────────────────────────────────────────────────────────
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", ...sans, paddingBottom: 60 }}>
+    <div style={{minHeight:"100vh",background:"#F5F4F0",fontFamily:"'IBM Plex Sans',sans-serif",paddingBottom:64}}>
 
-      {/* ── TOP BAR ── */}
-      <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "6px 12px",
-        display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ ...mono, fontSize: 16, fontWeight: 700, color: C.ink }}>
-            ⚡ <span style={{ color: C.orange }}>VAJRA</span>
-          </div>
-          <button onClick={() => setShowBroker(true)} style={{
-            ...sans, fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 20,
-            border: `1.5px solid ${C.orange}`, background: "#FFF1E6", color: C.orange, cursor: "pointer",
-          }}>🔗 {broker}</button>
-        </div>
-
-        {/* Index LTPs */}
-        <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-          {[
-            ["SENSEX", sensex?.ltp, sensex?.change, sensex?.pct],
-            ["NIFTY",  nifty?.ltp,  0, 0],
-            ["VIX",    vix, 0, 0],
-          ].map(([name, ltp, chg, pct]) => (
-            <div key={name} style={{ textAlign: "center" }}>
-              <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>{name}</div>
-              <div style={{ ...mono, fontSize: 14, fontWeight: 700, color: chg >= 0 ? C.green : chg < 0 ? C.red : C.ink }}>
-                {ltp ? ltp.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—"}
-              </div>
-              {chg !== 0 && <div style={{ ...mono, fontSize: 9, color: chg >= 0 ? C.green : C.red }}>
-                {chg >= 0 ? "+" : ""}{chg?.toFixed(1)} ({pct >= 0 ? "+" : ""}{pct?.toFixed(2)}%)
-              </div>}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1 }}>DAY P&L</div>
-            <div style={{ ...mono, fontSize: 14, fontWeight: 700, color: dayPnl >= 0 ? C.green : C.red }}>
-              {dayPnl >= 0 ? "+" : ""}₹{Math.abs(dayPnl).toLocaleString()}
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1 }}>PRAGNYA</div>
-            <div style={{ ...mono, fontSize: 14, fontWeight: 700, color: dscore >= 80 ? C.green : dscore >= 50 ? C.amber : C.red }}>
-              {dscore}/100
-            </div>
-          </div>
-          <div style={{ ...mono, fontSize: 11, color: C.muted }}>{now}</div>
-        </div>
-      </div>
-
-      {/* ── MSG BANNER ── */}
-      {msg && (
-        <div style={{ background: msg.type === "ok" ? C.greenBg : C.redBg, padding: "8px 16px",
-          fontSize: 12, fontWeight: 600, color: msg.type === "ok" ? "#065F46" : "#991B1B",
-          borderBottom: `1px solid ${msg.type === "ok" ? "#6EE7B7" : "#FECACA"}` }}>
-          {msg.text}
+      {/* Toast */}
+      {toast && (
+        <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?"#D1FAE5":"#FEE2E2",padding:"10px 16px",fontSize:13,fontWeight:600,color:toast.ok?"#065F46":"#991B1B",textAlign:"center"}}>
+          {toast.msg}
         </div>
       )}
 
-      {/* ── INSTRUMENT SELECTOR ROW ── */}
-      <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "8px 12px",
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 8, alignItems: "end" }}>
-        <Select label="Symbol" value={symbol} onChange={setSymbol}
-          options={Object.keys(INSTRUMENTS).map(k => ({ value: k, label: k }))} />
-        <Select label="Expiry" value={expiry} onChange={setExpiry}
-          options={expiries.map(e => ({ value: e, label: e }))} />
-        <Select label="CE Strike" value={ceStrike || ""} onChange={v => setCeStrike(Number(v))}
-          options={strikes.map(s => ({ value: s.strike, label: `${s.strike}${s.is_atm ? " ◀ATM" : ""}` }))} />
-        <Select label="PE Strike" value={peStrike || ""} onChange={v => setPeStrike(Number(v))}
-          options={strikes.map(s => ({ value: s.strike, label: `${s.strike}${s.is_atm ? " ◀ATM" : ""}` }))} />
-        <NumInput label="Qty (Lots)" value={qty} onChange={setQty} />
-        <Select label="Order Type" value={orderType} onChange={setOrderType}
-          options={["Market Protection", "Limit", "Market"]} />
-        <div>
-          <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 3 }}>SL Pts</div>
-          <input type="number" value={slPts} onChange={e => setSlPts(+e.target.value)}
-            style={{ ...mono, width: "100%", border: `1.5px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 12, background: C.white }} />
+      {/* Top bar */}
+      <div style={{background:"#fff",borderBottom:"1px solid #E2E0D8",padding:"8px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:16,fontWeight:700,color:"#1A1916"}}>⚡ <span style={{color:"#E8540A"}}>VAJRA</span></div>
+          <button onClick={()=>setScreen("broker")}
+            style={{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:20,border:"1.5px solid #E8540A",background:"#FFF1E6",color:"#E8540A",cursor:"pointer",fontFamily:"'IBM Plex Sans',sans-serif",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            🔗 {broker}
+          </button>
         </div>
-        <div>
-          <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 3 }}>Tgt Pts</div>
-          <input type="number" value={tgtPts} onChange={e => setTgtPts(+e.target.value)}
-            style={{ ...mono, width: "100%", border: `1.5px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 12, background: C.white }} />
-        </div>
-      </div>
-
-      {/* ── TRADING PANEL ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr", gap: 0, margin: "10px 12px" }}>
-
-        {/* CE Side */}
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: "10px 0 0 10px",
-          padding: 14, borderRight: "none" }}>
-          <div style={{ ...mono, fontSize: 9, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 8 }}>
-            {symbol} {ceStrike} CE
-          </div>
-          <div style={{ ...mono, fontSize: 28, fontWeight: 700, color: C.ink, marginBottom: 2 }}>
-            {ceLtp?.toFixed(1) || "—"}
-          </div>
-          <div style={{ ...mono, fontSize: 10, color: C.muted, marginBottom: 16 }}>
-            L: {ceHiLo.l?.toFixed(1) || "—"} &nbsp; H: {ceHiLo.h?.toFixed(1) || "—"}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Btn full color="sell" onClick={() => execute("Sell Call")}>← Sell Call</Btn>
-            <Btn full color="buy"  onClick={() => execute("Buy Call")} >↑ Buy Call</Btn>
-          </div>
-          <div style={{ marginTop: 12, ...mono, fontSize: 9, color: C.muted }}>
-            Lot: {instr.lot} &nbsp;|&nbsp; Tick: {instr.tick}
-          </div>
-        </div>
-
-        {/* Center — Index */}
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, padding: 14, textAlign: "center",
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ ...mono, fontSize: 10, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 4 }}>{symbol}</div>
-            <div style={{ ...mono, fontSize: 32, fontWeight: 700, color: C.ink, lineHeight: 1 }}>
-              {indexLtp ? indexLtp.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—"}
+        <div style={{display:"flex",gap:16,alignItems:"center"}}>
+          {[
+            ["SENSEX", sensexLtp, sensexChg, sensexPct],
+            ["NIFTY",  niftyLtp,  0, 0],
+            ["VIX",    market.vix, 0, 0],
+          ].map(([name,ltp,chg,pct])=>(
+            <div key={name} style={{textAlign:"center"}}>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1,textTransform:"uppercase"}}>{name}</div>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,fontWeight:700,color:chg>0?"#1A7F4B":chg<0?"#C0392B":"#1A1916"}}>{ltp?ltp.toLocaleString("en-IN",{maximumFractionDigits:2}):"—"}</div>
+              {chg!==0&&<div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:chg>=0?"#1A7F4B":"#C0392B"}}>{chg>=0?"+":""}{chg?.toFixed(1)} ({pct>=0?"+":""}{pct?.toFixed(2)}%)</div>}
             </div>
-            <div style={{ ...mono, fontSize: 12, color: indexChg >= 0 ? C.green : C.red, marginTop: 4, fontWeight: 600 }}>
-              {indexChg >= 0 ? "+" : ""}{indexChg?.toFixed(2)} ({indexPct >= 0 ? "+" : ""}{indexPct?.toFixed(2)}%)
-            </div>
-          </div>
-
-          <div style={{ width: "100%", margin: "12px 0" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-              <Btn full sm color="red" onClick={killSwitch}>🛑 Kill</Btn>
-              <Btn full sm color="ghost" onClick={() => { setShowGita(true); setGitaReason("Meditation break") }}>🕉️ Gita</Btn>
-            </div>
-          </div>
-
-          {/* PRAGNYA mini */}
-          <div style={{ width: "100%", background: C.bg, borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>PRAGNYA</span>
-              <span style={{ ...mono, fontSize: 10, fontWeight: 700, color: dscore >= 80 ? C.green : dscore >= 50 ? C.amber : C.red }}>{dscore}/100</span>
-            </div>
-            <ProgBar pct={100 - dscore} />
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, ...mono, fontSize: 9, color: C.muted }}>
-              <span>Trades: {st.trades_taken || 0}/{cfg.max_trades_per_day || 4}</span>
-              <span>SL: {st.sl_hits || 0}/{cfg.max_sl_hits || 2}</span>
-            </div>
-          </div>
-
-          <div style={{ ...mono, fontSize: 9, color: C.muted, marginTop: 8 }}>
-            Expiry: {expiry} &nbsp;|&nbsp; {instr.expiry_day}
-          </div>
-        </div>
-
-        {/* PE Side */}
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: "0 10px 10px 0",
-          padding: 14, borderLeft: "none" }}>
-          <div style={{ ...mono, fontSize: 9, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 8, textAlign: "right" }}>
-            {symbol} {peStrike} PE
-          </div>
-          <div style={{ ...mono, fontSize: 28, fontWeight: 700, color: C.ink, marginBottom: 2, textAlign: "right" }}>
-            {peLtp?.toFixed(1) || "—"}
-          </div>
-          <div style={{ ...mono, fontSize: 10, color: C.muted, marginBottom: 16, textAlign: "right" }}>
-            L: {peHiLo.l?.toFixed(1) || "—"} &nbsp; H: {peHiLo.h?.toFixed(1) || "—"}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Btn full color="sell" onClick={() => execute("Sell Put")}>Sell Put →</Btn>
-            <Btn full color="buy"  onClick={() => execute("Buy Put")} >↓ Buy Put</Btn>
-          </div>
-          <div style={{ marginTop: 12, ...mono, fontSize: 9, color: C.muted, textAlign: "right" }}>
-            VIX: {vix?.toFixed(2) || "—"}
-          </div>
-        </div>
-      </div>
-
-      {/* ── BOTTOM TABS ── */}
-      <div style={{ margin: "0 12px" }}>
-        <div style={{ display: "flex", borderBottom: `2px solid ${C.border}`, marginBottom: 10 }}>
-          {[["trade", "Positions"], ["orders", "Order Book"], ["journal", "Trade Book"], ["config", "Config"]].map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)} style={{
-              ...sans, padding: "8px 14px", border: "none", background: "none",
-              borderBottom: tab === k ? `2px solid ${C.orange}` : "2px solid transparent",
-              color: tab === k ? C.orange : C.muted, fontWeight: 600, fontSize: 12,
-              cursor: "pointer", marginBottom: -2,
-            }}>{label}</button>
           ))}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, paddingRight: 4 }}>
-            <span style={{ ...mono, fontSize: 10, color: C.muted }}>MTM:</span>
-            <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: dayPnl >= 0 ? C.green : C.red }}>
-              {dayPnl >= 0 ? "+" : ""}₹{Math.abs(dayPnl).toLocaleString()}
-            </span>
+        </div>
+        <div style={{display:"flex",gap:14,alignItems:"center"}}>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1}}>DAY P&L</div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,fontWeight:700,color:dayPnl>=0?"#1A7F4B":"#C0392B"}}>{dayPnl>=0?"+":""}₹{Math.abs(dayPnl).toLocaleString()}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1}}>PRAGNYA</div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,fontWeight:700,color:dscore>=80?"#1A7F4B":dscore>=50?"#B45309":"#C0392B"}}>{dscore}/100</div>
+          </div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"#9B9689"}}>{now}</div>
+        </div>
+      </div>
+
+      {/* Instrument row */}
+      <div style={{background:"#fff",borderBottom:"1px solid #E2E0D8",padding:"8px 12px",display:"flex",flexWrap:"wrap",gap:10,alignItems:"flex-end"}}>
+        {/* Symbol */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>Symbol</div>
+          <select value={symbol} onChange={e=>setSymbol(e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,fontWeight:600,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",background:"#fff",cursor:"pointer"}}>
+            {Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}
+          </select>
+        </div>
+        {/* Expiry */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>Expiry</div>
+          <select value={expiry} onChange={e=>setExpiry(e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,fontWeight:600,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",background:"#fff",cursor:"pointer"}}>
+            {expiries.map(e=><option key={e}>{e}</option>)}
+          </select>
+        </div>
+        {/* CE Strike */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>CE Strike</div>
+          <select value={ceStrike} onChange={e=>setCeStrike(e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,fontWeight:600,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",background:"#fff",cursor:"pointer"}}>
+            {strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}
+          </select>
+        </div>
+        {/* PE Strike */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>PE Strike</div>
+          <select value={peStrike} onChange={e=>setPeStrike(e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,fontWeight:600,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",background:"#fff",cursor:"pointer"}}>
+            {strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}
+          </select>
+        </div>
+        {/* Qty */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>Qty (Lots)</div>
+          <div style={{display:"flex",alignItems:"center",border:"1.5px solid #E2E0D8",borderRadius:6,background:"#fff",overflow:"hidden"}}>
+            <button onClick={()=>setQty(q=>Math.max(1,q-1))} style={{padding:"6px 10px",background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:"#1A1916",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>−</button>
+            <span style={{fontFamily:"'IBM Plex Mono',monospace",padding:"0 8px",fontWeight:700,fontSize:13}}>{qty}</span>
+            <button onClick={()=>setQty(q=>q+1)} style={{padding:"6px 10px",background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:"#1A1916",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>+</button>
+          </div>
+        </div>
+        {/* SL */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>SL Pts</div>
+          <input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",width:60,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",fontSize:12,background:"#fff",color:"#1A1916"}}/>
+        </div>
+        {/* Target */}
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>Tgt Pts</div>
+          <input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)}
+            style={{fontFamily:"'IBM Plex Mono',monospace",width:60,border:"1.5px solid #E2E0D8",borderRadius:6,padding:"6px 8px",fontSize:12,background:"#fff",color:"#1A1916"}}/>
+        </div>
+      </div>
+
+      {/* Trading panel */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",margin:"10px 12px",gap:0}}>
+        {/* CE */}
+        <div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:"10px 0 0 10px",padding:14,borderRight:"none"}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:6}}>{symbol} {ceStrike} CE</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:28,fontWeight:700,color:"#1A1916",lineHeight:1,marginBottom:4}}>{ceLtp||"—"}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginBottom:14}}>Lot: {instr.lot}</div>
+          <button onPointerDown={()=>execute("Sell Call")}
+            style={{display:"block",width:"100%",padding:"12px 0",marginBottom:8,borderRadius:6,border:"none",background:"#C0392B",color:"#fff",fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            ← Sell Call
+          </button>
+          <button onPointerDown={()=>execute("Buy Call")}
+            style={{display:"block",width:"100%",padding:"12px 0",borderRadius:6,border:"none",background:"#1A7F4B",color:"#fff",fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            ↑ Buy Call
+          </button>
+        </div>
+
+        {/* Center */}
+        <div style={{background:"#fff",border:"1px solid #E2E0D8",padding:12,textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>{symbol}</div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:24,fontWeight:700,color:"#1A1916",lineHeight:1}}>
+              {(symbol==="SENSEX"?sensexLtp:niftyLtp)?.toLocaleString("en-IN",{maximumFractionDigits:2})||"—"}
+            </div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:sensexChg>=0?"#1A7F4B":"#C0392B",marginTop:4,fontWeight:600}}>
+              {sensexChg>=0?"+":""}{sensexChg?.toFixed(2)} ({sensexPct>=0?"+":""}{sensexPct?.toFixed(2)}%)
+            </div>
+          </div>
+          <div style={{width:"100%",background:"#F5F4F0",borderRadius:8,padding:"8px 10px",marginTop:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1,textTransform:"uppercase"}}>PRAGNYA</span>
+              <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,fontWeight:700,color:dscore>=80?"#1A7F4B":dscore>=50?"#B45309":"#C0392B"}}>{dscore}/100</span>
+            </div>
+            <div style={{background:"#ECEAE4",borderRadius:100,height:4,overflow:"hidden"}}>
+              <div style={{width:`${Math.min(100,100-dscore)}%`,height:"100%",background:dscore>=80?"#1A7F4B":dscore>=50?"#B45309":"#C0392B",borderRadius:100}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689"}}>
+              <span>Trades: {st.trades_taken||0}/{cfg.max_trades_per_day||4}</span>
+              <span>SL: {st.sl_hits||0}/{cfg.max_sl_hits||2}</span>
+            </div>
+          </div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginTop:8}}>{expiry} · {instr.expiry_day}</div>
+        </div>
+
+        {/* PE */}
+        <div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:"0 10px 10px 0",padding:14,borderLeft:"none"}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:6,textAlign:"right"}}>{symbol} {peStrike} PE</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:28,fontWeight:700,color:"#1A1916",lineHeight:1,marginBottom:4,textAlign:"right"}}>{peLtp||"—"}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginBottom:14,textAlign:"right"}}>VIX: {market.vix?.toFixed(2)||"—"}</div>
+          <button onPointerDown={()=>execute("Sell Put")}
+            style={{display:"block",width:"100%",padding:"12px 0",marginBottom:8,borderRadius:6,border:"none",background:"#C0392B",color:"#fff",fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            Sell Put →
+          </button>
+          <button onPointerDown={()=>execute("Buy Put")}
+            style={{display:"block",width:"100%",padding:"12px 0",borderRadius:6,border:"none",background:"#1A7F4B",color:"#fff",fontFamily:"'IBM Plex Sans',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            ↓ Buy Put
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{margin:"0 12px"}}>
+        <div style={{display:"flex",borderBottom:"2px solid #E2E0D8",marginBottom:10}}>
+          {[["positions","Positions"],["orders","Orders"],["journal","Trade Book"],["config","Config"]].map(([k,label])=>(
+            <button key={k} onClick={()=>setTab(k)}
+              style={{padding:"8px 14px",border:"none",background:"none",borderBottom:tab===k?"2px solid #E8540A":"2px solid transparent",color:tab===k?"#E8540A":"#9B9689",fontWeight:600,fontSize:12,cursor:"pointer",marginBottom:-2,fontFamily:"'IBM Plex Sans',sans-serif",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+              {label}
+            </button>
+          ))}
+          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,paddingRight:4}}>
+            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"#9B9689"}}>MTM:</span>
+            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,fontWeight:700,color:dayPnl>=0?"#1A7F4B":"#C0392B"}}>{dayPnl>=0?"+":""}₹{Math.abs(dayPnl).toLocaleString()}</span>
           </div>
         </div>
 
-        {/* Positions tab */}
-        {tab === "trade" && (
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr 1.5fr",
-              padding: "8px 12px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-              {["Symbol", "Qty", "Avg", "LTP", "SL", "Target", "Action"].map(h => (
-                <div key={h} style={{ ...mono, fontSize: 9, fontWeight: 600, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>{h}</div>
+        {/* Positions */}
+        {tab==="positions"&&(
+          <div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:10,overflow:"hidden"}}>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1.5fr",padding:"8px 12px",borderBottom:"1px solid #E2E0D8",background:"#F5F4F0"}}>
+              {["Symbol","Qty","Avg","LTP","SL","Action"].map(h=>(
+                <div key={h} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,fontWeight:600,color:"#9B9689",letterSpacing:1,textTransform:"uppercase"}}>{h}</div>
               ))}
             </div>
-            {positions.length === 0 ? (
-              <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>No open positions</div>
-            ) : positions.map(p => {
-              const lots = JSON.parse(p.extra_json || "{}").lots || 1
-              const curLtp = p.instrument.includes("CE") ? ceLtp : peLtp
-              const mtm = curLtp ? (p.direction === "SELL" ? p.entry - curLtp : curLtp - p.entry) * instr.lot * lots : 0
+            {positions.length===0?(
+              <div style={{padding:32,textAlign:"center",color:"#9B9689",fontSize:13}}>No open positions</div>
+            ):positions.map(p=>{
+              const lots = JSON.parse(p.extra_json||"{}").lots||1
+              const curLtp = p.instrument.includes("CE")?ceLtp:peLtp
               return (
-                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr 1.5fr",
-                  padding: "10px 12px", borderBottom: `1px solid ${C.border}`, alignItems: "center" }}>
+                <div key={p.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1.5fr",padding:"10px 12px",borderBottom:"1px solid #E2E0D8",alignItems:"center"}}>
                   <div>
-                    <div style={{ ...mono, fontWeight: 700, fontSize: 12, color: C.ink }}>{p.instrument}</div>
-                    <div style={{ fontSize: 10, color: p.direction === "SELL" ? C.red : C.green, fontWeight: 600 }}>{p.direction}</div>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,fontSize:11,color:"#1A1916"}}>{p.instrument}</div>
+                    <div style={{fontSize:10,color:p.direction==="SELL"?"#C0392B":"#1A7F4B",fontWeight:600}}>{p.direction}</div>
                   </div>
-                  <div style={{ ...mono, fontSize: 12 }}>{lots * instr.lot}</div>
-                  <div style={{ ...mono, fontSize: 12 }}>{p.entry?.toFixed(1)}</div>
-                  <div style={{ ...mono, fontSize: 12, color: mtm >= 0 ? C.green : C.red, fontWeight: 700 }}>
-                    {curLtp?.toFixed(1) || "—"}
-                  </div>
-                  <div style={{ ...mono, fontSize: 12, color: C.red }}>{p.sl?.toFixed(1)}</div>
-                  <div style={{ ...mono, fontSize: 12, color: C.green }}>{p.target_price?.toFixed(1)}</div>
-                  <div style={{ display: "flex", gap: 4 }}>
-                    <Btn sm color="green" onClick={() => closePosition(p.id, curLtp || p.target_price, "TARGET")}>Exit</Btn>
-                    <Btn sm color="red"   onClick={() => closePosition(p.id, p.sl, "SL")}>SL</Btn>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{lots*instr.lot}</div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{p.entry?.toFixed(1)}</div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"#1A1916",fontWeight:700}}>{curLtp||"—"}</div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"#C0392B"}}>{p.sl?.toFixed(1)}</div>
+                  <div style={{display:"flex",gap:4}}>
+                    <button onPointerDown={()=>closePos(p.id,curLtp||p.target_price,"TARGET")}
+                      style={{padding:"5px 8px",borderRadius:5,border:"none",background:"#1A7F4B",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Exit</button>
+                    <button onPointerDown={()=>closePos(p.id,p.sl,"SL")}
+                      style={{padding:"5px 8px",borderRadius:5,border:"none",background:"#C0392B",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>SL</button>
                   </div>
                 </div>
               )
             })}
-            {positions.length > 0 && (
-              <div style={{ padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center",
-                borderTop: `1px solid ${C.border}`, background: C.bg }}>
-                <span style={{ ...mono, fontSize: 11, color: C.muted }}>
-                  Net Buy: {positions.filter(p => p.direction === "BUY").length} &nbsp;|&nbsp;
-                  Net Sell: {positions.filter(p => p.direction === "SELL").length}
-                </span>
-                <Btn sm color="red" onClick={() => positions.forEach(p => closePosition(p.id, p.sl, "SL"))}>
-                  Close All
-                </Btn>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Order Book */}
-        {tab === "orders" && (
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>
-            Order book syncs with {broker} API — coming in Phase 2
-          </div>
-        )}
+        {tab==="orders"&&<div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:10,padding:32,textAlign:"center",color:"#9B9689",fontSize:13}}>Live order sync with {broker} — Phase 2</div>}
 
-        {/* Trade Book */}
-        {tab === "journal" && (
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr",
-              padding: "8px 12px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-              {["Symbol", "Dir", "Entry", "Exit", "P&L", "Time"].map(h => (
-                <div key={h} style={{ ...mono, fontSize: 9, fontWeight: 600, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>{h}</div>
+        {tab==="journal"&&(
+          <div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:10,overflow:"hidden"}}>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1fr",padding:"8px 12px",borderBottom:"1px solid #E2E0D8",background:"#F5F4F0"}}>
+              {["Symbol","Dir","Entry","Exit","P&L","Time"].map(h=>(
+                <div key={h} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,fontWeight:600,color:"#9B9689",letterSpacing:1,textTransform:"uppercase"}}>{h}</div>
               ))}
             </div>
-            {(pragnya?.trades || []).filter(t => t.status === "CLOSED").length === 0 ? (
-              <div style={{ padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>No closed trades today</div>
-            ) : (pragnya?.trades || []).filter(t => t.status === "CLOSED").map(t => (
-              <div key={t.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr",
-                padding: "10px 12px", borderBottom: `1px solid ${C.border}`, alignItems: "center" }}>
-                <div style={{ ...mono, fontWeight: 700, fontSize: 12 }}>{t.instrument}</div>
-                <Badge sm color={t.direction === "SELL" ? "red" : "green"}>{t.direction}</Badge>
-                <div style={{ ...mono, fontSize: 12 }}>{t.entry?.toFixed(1)}</div>
-                <div style={{ ...mono, fontSize: 12 }}>{t.exit_price?.toFixed(1) || "—"}</div>
-                <div style={{ ...mono, fontSize: 12, fontWeight: 700, color: t.pnl >= 0 ? C.green : C.red }}>
-                  {t.pnl >= 0 ? "+" : ""}₹{t.pnl?.toFixed(0)}
-                </div>
-                <div style={{ ...mono, fontSize: 11, color: C.muted }}>{t.time?.slice(0,5)}</div>
+            {(pragnya?.trades||[]).filter(t=>t.status==="CLOSED").length===0?(
+              <div style={{padding:32,textAlign:"center",color:"#9B9689",fontSize:13}}>No closed trades today</div>
+            ):(pragnya?.trades||[]).filter(t=>t.status==="CLOSED").map(t=>(
+              <div key={t.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1fr",padding:"10px 12px",borderBottom:"1px solid #E2E0D8",alignItems:"center"}}>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,fontSize:11}}>{t.instrument}</div>
+                <div style={{fontSize:10,color:t.direction==="SELL"?"#C0392B":"#1A7F4B",fontWeight:700}}>{t.direction}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{t.entry?.toFixed(1)}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{t.exit_price?.toFixed(1)||"—"}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:t.pnl>=0?"#1A7F4B":"#C0392B"}}>{t.pnl>=0?"+":""}₹{Math.round(t.pnl||0)}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:"#9B9689"}}>{t.time?.slice(0,5)}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Config */}
-        {tab === "config" && (
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
-            <div style={{ ...mono, fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 12, letterSpacing: 1, textTransform: "uppercase" }}>PRAGNYA Rules</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {[
-                ["Max Trades/Day", cfg.max_trades_per_day],
-                ["Daily Loss Limit ₹", cfg.daily_loss_limit],
-                ["Daily Target ₹", cfg.daily_target],
-                ["Max SL Hits", cfg.max_sl_hits],
-                ["Cooling After SL (min)", cfg.cooling_minutes_after_sl],
-                ["SL Points", cfg.sl_points],
-              ].map(([label, val]) => (
-                <div key={label}>
-                  <div style={{ ...mono, fontSize: 8, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
-                  <div style={{ ...mono, fontSize: 14, fontWeight: 700, color: C.ink }}>{val}</div>
-                </div>
+        {tab==="config"&&(
+          <div style={{background:"#fff",border:"1px solid #E2E0D8",borderRadius:10,padding:16}}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"#1A1916",marginBottom:12,letterSpacing:1,textTransform:"uppercase"}}>PRAGNYA Rules</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+              {[["Max Trades/Day",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Daily Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
+                <div key={l}><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#9B9689",letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>{l}</div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:16,fontWeight:700,color:"#1A1916"}}>{v}</div></div>
               ))}
             </div>
-            <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-              <div style={{ ...mono, fontSize: 9, color: C.muted, letterSpacing: 1, marginBottom: 8, textTransform: "uppercase" }}>Today's Gita</div>
-              <div style={{ fontSize: 12, color: "#3D3B35", fontStyle: "italic", lineHeight: 1.6 }}>"{quote.text}"</div>
-              <div style={{ ...mono, fontSize: 9, color: C.muted, marginTop: 6, letterSpacing: 1 }}>— {quote.src}</div>
+            <div style={{background:"#F5F4F0",borderRadius:8,padding:14}}>
+              <div style={{fontSize:12,color:"#3D3B35",fontStyle:"italic",lineHeight:1.6}}>"{quote.text}"</div>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:"#9B9689",marginTop:6}}>— {quote.src}</div>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── BOTTOM NAV ── */}
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.white,
-        borderTop: `1px solid ${C.border}`, display: "flex", zIndex: 9999 }}>
-        {[["trade","📋","Positions"],["orders","📒","Orders"],["journal","📊","Trade Book"],["config","⚙️","Config"]].map(([k, icon, label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{
-            flex: 1, height: 52, border: "none", background: "none", cursor: "pointer",
-            borderTop: tab === k ? `2px solid ${C.orange}` : "2px solid transparent",
-            color: tab === k ? C.orange : C.muted,
-            ...mono, fontSize: 8, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase",
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
-          }}>
-            <span style={{ fontSize: 15 }}>{icon}</span>{label}
+      {/* Bottom nav */}
+      <nav style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:"1px solid #E2E0D8",display:"flex",zIndex:9999}}>
+        {[["positions","📋","Positions"],["orders","📒","Orders"],["journal","📊","Trades"],["config","⚙️","Config"]].map(([k,icon,label])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{flex:1,height:52,border:"none",background:"none",cursor:"pointer",borderTop:tab===k?"2px solid #E8540A":"2px solid transparent",color:tab===k?"#E8540A":"#9B9689",fontFamily:"'IBM Plex Mono',monospace",fontSize:8,fontWeight:600,letterSpacing:1,textTransform:"uppercase",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+            <span style={{fontSize:15}}>{icon}</span>{label}
           </button>
         ))}
       </nav>
