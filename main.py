@@ -1,28 +1,20 @@
 """
 MTU Terminal — FastAPI Backend v1.0
-WebSocket market feed + REST API
-VAJRA (Sensex) · SUTRA (Nifty) · PRAGNYA discipline engine
+Flat file structure — no subfolders
 """
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import asyncio, json, os, sys
 from datetime import datetime
 import pytz
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Import all routers from flat files
+from route_feed    import router as feed_router,    startup_feed
+from route_auth    import router as auth_router
+from route_vajra   import router as vajra_router
+from route_sutra   import router as sutra_router
+from route_pragnya import router as pragnya_router
 
-from routes.feed    import router as feed_router
-from routes.vajra   import router as vajra_router
-from routes.sutra   import router as sutra_router
-from routes.pragnya import router as pragnya_router
-from routes.auth    import router as auth_router
-
-app = FastAPI(
-    title="MTU Terminal API",
-    description="Mahakaal Trading Universe — Backend",
-    version="1.0.0",
-)
+app = FastAPI(title="MTU Terminal API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,11 +30,11 @@ app.include_router(vajra_router,   prefix="/api/vajra",   tags=["VAJRA"])
 app.include_router(sutra_router,   prefix="/api/sutra",   tags=["SUTRA"])
 app.include_router(pragnya_router, prefix="/api/pragnya", tags=["PRAGNYA"])
 
+@app.on_event("startup")
+async def startup():
+    await startup_feed()
+
 @app.get("/api/health")
 async def health():
     IST = pytz.timezone("Asia/Kolkata")
-    return {
-        "status": "ok",
-        "time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
-        "version": "1.0.0",
-    }
+    return {"status": "ok", "time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"), "version": "1.0.0"}
