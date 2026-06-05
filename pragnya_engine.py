@@ -114,20 +114,22 @@ def _conn(): return sqlite3.connect(DB_PATH)
 def get_state(product: str) -> dict:
     conn = _conn()
     today = date.today().isoformat()
+    conn.execute("INSERT OR IGNORE INTO daily_state (date, product) VALUES (?,?)", (today, product))
+    conn.commit()
     row = conn.execute(
-        "SELECT * FROM daily_state WHERE date=? AND product=?", (today, product)
+        "SELECT date,product,trades_taken,sl_hits,target_hits,daily_pnl,"
+        "cooling_until,killed_at,last_trade_time,last_sl_time,discipline_score "
+        "FROM daily_state WHERE date=? AND product=?", (today, product)
     ).fetchone()
-    if not row:
-        conn.execute(
-            "INSERT INTO daily_state (date, product) VALUES (?,?)", (today, product)
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM daily_state WHERE date=? AND product=?", (today, product)
-        ).fetchone()
-    cols = [d[0] for d in conn.execute("PRAGMA table_info(daily_state)").fetchall()]
     conn.close()
-    return dict(zip(cols, row))
+    return {
+        "date": row[0], "product": row[1],
+        "trades_taken": row[2] or 0, "sl_hits": row[3] or 0,
+        "target_hits": row[4] or 0, "daily_pnl": float(row[5] or 0),
+        "cooling_until": row[6], "killed_at": row[7],
+        "last_trade_time": row[8], "last_sl_time": row[9],
+        "discipline_score": row[10] or 100,
+    }
 
 def update_state(product: str, **kwargs):
     conn = _conn()
@@ -183,27 +185,31 @@ def close_trade(trade_id: int, exit_price: float, pnl: float,
     conn.commit()
     conn.close()
 
-def get_today_trades(product: str) -> list[dict]:
+def get_today_trades(product: str) -> list:
     conn = _conn()
     today = date.today().isoformat()
     rows = conn.execute(
-        "SELECT * FROM trades WHERE date=? AND product=? ORDER BY time DESC",
+        "SELECT id,date,time,product,strategy,instrument,direction,entry,exit_price,"
+        "sl,target_price,pnl,status,exit_reason,hold_minutes,extra_json "
+        "FROM trades WHERE date=? AND product=? ORDER BY time DESC",
         (today, product)
     ).fetchall()
-    cols = [d[0] for d in conn.execute("PRAGMA table_info(trades)").fetchall()]
     conn.close()
-    return [dict(zip(cols, r)) for r in rows]
+    keys = ["id","date","time","product","strategy","instrument","direction","entry",
+            "exit_price","sl","target_price","pnl","status","exit_reason","hold_minutes","extra_json"]
+    return [dict(zip(keys, r)) for r in rows]
 
-def get_today_violations(product: str) -> list[dict]:
+def get_today_violations(product: str) -> list:
     conn = _conn()
     today = date.today().isoformat()
     rows = conn.execute(
-        "SELECT * FROM violations WHERE date=? AND product=? ORDER BY time DESC",
+        "SELECT id,date,time,product,type,message,severity "
+        "FROM violations WHERE date=? AND product=? ORDER BY time DESC",
         (today, product)
     ).fetchall()
-    cols = [d[0] for d in conn.execute("PRAGMA table_info(violations)").fetchall()]
     conn.close()
-    return [dict(zip(cols, r)) for r in rows]
+    keys = ["id","date","time","product","type","message","severity"]
+    return [dict(zip(keys, r)) for r in rows]
 
 def save_eod_emotion(product: str, emotion: str, note: str = ""):
     conn = _conn()
