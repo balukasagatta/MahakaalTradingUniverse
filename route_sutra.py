@@ -15,6 +15,10 @@ from pragnya_engine import (
 )
 
 router  = APIRouter()
+import time as _time
+_chain_cache = {}
+_CACHE_TTL = 20
+_CACHE_TTL = 20
 IST     = pytz.timezone("Asia/Kolkata")
 PRODUCT = "SUTRA"
 
@@ -47,6 +51,10 @@ async def get_expiries(index: str = "NIFTY"):
 
 @router.get("/chain")
 async def get_chain(index: str = "NIFTY", expiry: str = Query(...)):
+    cache_key = f"{index}_{expiry}"
+    now = _time.time()
+    if cache_key in _chain_cache and now - _chain_cache[cache_key]["ts"] < _CACHE_TTL:
+        return _chain_cache[cache_key]["data"]
     if index not in INDICES:
         raise HTTPException(400, f"Unknown index: {index}")
     info = INDICES[index]
@@ -88,12 +96,14 @@ async def get_chain(index: str = "NIFTY", expiry: str = Query(...)):
             },
         })
 
-    return {
+    result = {
         "index": index, "expiry": expiry,
         "spot": spot, "atm": atm,
         "lot": info["lot"], "step": info["step"],
         "strikes": strikes,
     }
+    _chain_cache[cache_key] = {"data": result, "ts": _time.time()}
+    return result
 
 @router.get("/state")
 async def get_sutra_state():
