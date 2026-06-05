@@ -45,29 +45,31 @@ def load_cfg():
         return merged
     return DEFAULT_CFG.copy()
 
-async def fetch_quote(instrument_key: str) -> dict:
+async def fetch_ltp_multi(keys: list) -> dict:
     token = get_upstox_token()
-    url   = f"https://api.upstox.com/v3/market-quote/quotes?instrument_key={instrument_key}"
+    url   = "https://api.upstox.com/v3/market-quote/ltp?instrument_key=" + ",".join(keys)
     async with httpx.AsyncClient(timeout=5) as client:
         r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
         if r.status_code == 200:
-            d = r.json().get("data", {}).get(instrument_key, {})
-            return {
-                "ltp":    d.get("last_price", 0),
-                "open":   d.get("ohlc", {}).get("open", 0),
-                "high":   d.get("ohlc", {}).get("high", 0),
-                "low":    d.get("ohlc", {}).get("low", 0),
-                "close":  d.get("ohlc", {}).get("close", 0),
-                "change": d.get("net_change", 0),
-                "pct":    d.get("net_change_percentage", 0),
-            }
+            return r.json().get("data", {})
     return {}
+
+def parse_ltp(data: dict, key: str) -> dict:
+    colon_key = key.replace("|", ":")
+    d = data.get(colon_key) or data.get(key) or {}
+    ltp   = d.get("last_price", 0)
+    close = d.get("cp", 0)
+    chg   = round(ltp - close, 2) if ltp and close else 0
+    pct   = round((chg / close) * 100, 2) if close else 0
+    return {"ltp": ltp, "close": close, "change": chg, "pct": pct}
 
 @router.get("/market")
 async def get_market():
-    sensex = await fetch_quote("BSE_INDEX|SENSEX")
-    vix    = await fetch_quote("NSE_INDEX|India VIX")
-    return {"sensex": sensex, "vix": vix, "time": datetime.now(IST).strftime("%H:%M:%S")}
+    data   = await fetch_ltp_multi(["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50", "NSE_INDEX|India VIX"])
+    sensex = parse_ltp(data, "BSE_INDEX|SENSEX")
+    nifty  = parse_ltp(data, "NSE_INDEX|Nifty 50")
+    vix_d  = parse_ltp(data, "NSE_INDEX|India VIX")
+    return {"sensex": sensex, "nifty": nifty, "vix": vix_d, "time": datetime.now(IST).strftime("%H:%M:%S")}
 
 @router.get("/state")
 async def get_vajra_state():

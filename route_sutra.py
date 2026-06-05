@@ -45,9 +45,15 @@ async def get_indices():
 async def get_expiries(index: str = "NIFTY"):
     if index not in INDICES:
         raise HTTPException(400, f"Unknown index: {index}")
+    cache_key = f"exp_{index}"
+    now = _time.time()
+    if cache_key in _chain_cache and now - _chain_cache[cache_key]["ts"] < 300:
+        return _chain_cache[cache_key]["data"]
     data = await _get(f"https://api.upstox.com/v2/option/contract?instrument_key={INDICES[index]['key']}")
     expiries = sorted(set(c["expiry"] for c in data.get("data", [])))
-    return {"index": index, "expiries": expiries}
+    result = {"index": index, "expiries": expiries}
+    _chain_cache[cache_key] = {"data": result, "ts": now}
+    return result
 
 @router.get("/chain")
 async def get_chain(index: str = "NIFTY", expiry: str = Query(...)):
@@ -147,3 +153,22 @@ async def paper_trade(req: StrategyRequest):
 async def kill_switch():
     trigger_kill(PRODUCT)
     return {"status": "ok"}
+
+@router.get("/chain/atm")
+@router.get("/chain/atm")
+async def get_atm_chain(index: str = "NIFTY", expiry: str = Query(...), window: int = 15):
+    full = await get_chain(index, expiry)
+    atm = full["atm"]
+    step = full["step"]
+    filtered = [s for s in full["strikes"] if abs(s["strike"] - atm) <= window * step]
+    return {**full, "strikes": filtered}
+
+@router.get("/ltp")
+async def get_option_ltp(ce_key: str, pe_key: str):
+    """Fetch LTP for just 2 instrument keys — ultra fast"""
+    keys = f"{ce_key},{pe_key}"
+    data = await _get(f"https://api.upstox.com/v3/market-quote/ltp?instrument_key={keys}")
+    result = {}
+    for k, v in data.get("data", {}).items():
+        result[k.replace(":", "|")] = v.get("last_price", 0)
+    return result
