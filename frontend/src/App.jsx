@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 
 const API = "https://mtutrade.in/api"
 const INSTRUMENTS = {
@@ -9,23 +9,40 @@ const BROKERS = ["Upstox","Dhan","Kotak Neo","Zerodha","Angel","Fyers"]
 
 async function api(path, opts={}) {
   try {
-    const r = await fetch(API+path, { headers:{"Content-Type":"application/json"}, ...opts })
+    const token = localStorage.getItem("mtu_token")
+    const headers = { "Content-Type":"application/json" }
+    if(token) headers["Authorization"] = `Bearer ${token}`
+    const r = await fetch(API+path, { headers, credentials:"include", ...opts })
     return r.json()
   } catch(e) { return null }
 }
 
-const T = {
+// ── Themes ─────────────────────────────────────────────────────────────────────
+const LIGHT = {
   canvas:"#FAF9F7", surface:"#FFFFFF", raised:"#F3F1EE",
   line:"#E8E4DE", subtle:"#7A7670", body:"#3D3A35", ink:"#1A1814",
   brand:"#C8590A", sell:"#C62828", buy:"#2E7D32",
   up:"#2E7D32", down:"#C62828", warn:"#E65100",
+  drawerBg:"#FFFFFF", overlay:"rgba(0,0,0,0.3)",
 }
+
+const DARK = {
+  canvas:"#0A0A0A", surface:"#141414", raised:"#1E1E1E",
+  line:"#2A2A2A", subtle:"#888888", body:"#BBBBBB", ink:"#F0EDE8",
+  brand:"#FF8C00", sell:"#FF1744", buy:"#00C853",
+  up:"#00C853", down:"#FF1744", warn:"#FF8C00",
+  drawerBg:"#141414", overlay:"rgba(0,0,0,0.7)",
+}
+
 const inter = "'Inter',system-ui,sans-serif"
 const mono  = "'JetBrains Mono','Fira Mono',monospace"
 
-export default function App() {
+export default function App({ user, onLogout }) {
+  const [dark,      setDark]      = useState(()=>localStorage.getItem("mtu_dark")==="1")
+  const [drawer,    setDrawer]    = useState(false)
   const [broker,    setBroker]    = useState(()=>localStorage.getItem("mtu_broker")||"")
-  const [screen,    setScreen]    = useState(()=>localStorage.getItem("mtu_broker")?"main":"broker")
+  const [brokerTok, setBrokerTok] = useState("")
+  const [tokSaved,  setTokSaved]  = useState(false)
   const [symbol,    setSymbol]    = useState("SENSEX")
   const [expiries,  setExpiries]  = useState([])
   const [expiry,    setExpiry]    = useState("")
@@ -48,6 +65,7 @@ export default function App() {
   const [loading,   setLoading]   = useState(false)
   const [isMobile,  setIsMobile]  = useState(window.innerWidth < 768)
 
+  const T = dark ? DARK : LIGHT
   const instr = INSTRUMENTS[symbol] || INSTRUMENTS.SENSEX
 
   useEffect(()=>{
@@ -62,25 +80,29 @@ export default function App() {
     return () => window.removeEventListener("resize", onResize)
   },[])
 
+  // Apply dark mode to body
+  useEffect(()=>{
+    document.body.style.background = T.canvas
+    localStorage.setItem("mtu_dark", dark?"1":"0")
+  },[dark, T.canvas])
+
   function showToast(msg, ok=true) { setToast({msg,ok}); setTimeout(()=>setToast(null),3000) }
 
   useEffect(()=>{
-    if(screen!=="main") return
     const poll=async()=>{ const r=await api("/vajra/market"); if(r) setMarket(r) }
     poll(); const t=setInterval(poll,5000); return()=>clearInterval(t)
-  },[screen])
+  },[])
 
   useEffect(()=>{
-    if(screen!=="main") return
     setExpiries([]); setExpiry(""); setStrikes([])
     setCeStrike(""); setPeStrike(""); setCeLtp(null); setPeLtp(null)
     api(`/sutra/expiries?index=${symbol}`).then(r=>{
       if(r?.expiries?.length){ setExpiries(r.expiries); setExpiry(r.expiries[0]) }
     })
-  },[symbol,screen])
+  },[symbol])
 
   useEffect(()=>{
-    if(!expiry||screen!=="main") return
+    if(!expiry) return
     setLoading(true)
     api(`/sutra/chain/atm?index=${symbol}&expiry=${expiry}`).then(r=>{
       setLoading(false)
@@ -94,29 +116,27 @@ export default function App() {
       setCeStrike(String(ce.strike)); setCeLtp(ce.ce.ltp); setCeKey(ce.ce.key)
       setPeStrike(String(pe.strike)); setPeLtp(pe.pe.ltp); setPeKey(pe.pe.key)
     })
-  },[expiry,symbol,screen])
+  },[expiry,symbol])
 
   useEffect(()=>{
-    if(!ceKey||!peKey||screen!=="main") return
+    if(!ceKey||!peKey) return
     const poll=async()=>{
       const r=await api(`/sutra/ltp?ce_key=${encodeURIComponent(ceKey)}&pe_key=${encodeURIComponent(peKey)}`)
       if(!r) return
       Object.entries(r).forEach(([k,v])=>{ if(k.includes("CE")) setCeLtp(v); if(k.includes("PE")) setPeLtp(v) })
     }
     const t=setInterval(poll,2000); return()=>clearInterval(t)
-  },[ceKey,peKey,screen])
+  },[ceKey,peKey])
 
   useEffect(()=>{
-    if(screen!=="main") return
     const poll=async()=>{
       const r=await api("/vajra/state")
       if(r?.state) setPragnya(r)
       if(r?.trades) setPositions(r.trades.filter(t=>t.status==="OPEN"))
     }
     poll(); const t=setInterval(poll,10000); return()=>clearInterval(t)
-  },[screen])
+  },[])
 
-  function selectBroker(b){ setBroker(b); localStorage.setItem("mtu_broker",b); setScreen("main") }
   function onCeChange(val){ setCeStrike(val); const r=strikes.find(s=>String(s.strike)===val); if(r){ setCeLtp(r.ce.ltp); setCeKey(r.ce.key) } }
   function onPeChange(val){ setPeStrike(val); const r=strikes.find(s=>String(s.strike)===val); if(r){ setPeLtp(r.pe.ltp); setPeKey(r.pe.key) } }
 
@@ -156,6 +176,21 @@ export default function App() {
 
   async function closeAll(){ for(const p of positions){ const cl=p.instrument.includes("CE")?ceLtp:peLtp; await closePos(p.id,cl||p.sl,"MANUAL") } }
 
+  async function handleLogout(){
+    await fetch(`${API}/auth/logout`,{method:"POST",credentials:"include"})
+    localStorage.removeItem("mtu_token")
+    localStorage.removeItem("mtu_user")
+    if(onLogout) onLogout()
+  }
+
+  function saveBrokerToken(){
+    if(!brokerTok.trim()){ showToast("Paste your broker API token",false); return }
+    localStorage.setItem(`mtu_broker_token_${broker}`, brokerTok.trim())
+    setTokSaved(true)
+    setTimeout(()=>setTokSaved(false),2000)
+    showToast("Token saved")
+  }
+
   const st=pragnya?.state||{}; const cfg=pragnya?.cfg||{}; const quote=pragnya?.quote||{}
   const dscore=st.discipline_score||100; const dayPnl=st.daily_pnl||0
   const sensex=market.sensex; const nifty=market.nifty; const vix=market.vix?.ltp
@@ -168,35 +203,15 @@ export default function App() {
   const lbl = t => <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:3}}>{t}</div>
 
   const ExecBtn = ({text,sub,onClick,color}) => (
-    <button onPointerDown={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:"100%",minHeight:isMobile?56:52,gap:1,borderRadius:8,border:"none",background:color,color:"#fff",fontFamily:inter,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",boxShadow:`0 2px 4px ${color}44`}}>
+    <button onPointerDown={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:"100%",minHeight:isMobile?56:52,gap:1,borderRadius:8,border:"none",background:color,color:"#fff",fontFamily:inter,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",boxShadow:dark?`0 2px 8px ${color}66`:`0 2px 4px ${color}44`}}>
       <span style={{fontWeight:700,fontSize:isMobile?15:14}}>{text}</span>
       {sub&&<span style={{fontWeight:500,fontSize:10,opacity:0.85}}>{sub}</span>}
     </button>
   )
 
-  // ── BROKER ────────────────────────────────────────────────────────────────
-  if(screen==="broker") return (
-    <div style={{minHeight:"100vh",background:T.canvas,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:inter}}>
-      <div style={{width:"100%",maxWidth:320,background:T.surface,borderRadius:16,padding:24,boxShadow:"0 4px 24px rgba(0,0,0,0.08)"}}>
-        <div style={{fontFamily:mono,fontSize:20,fontWeight:700,color:T.ink,marginBottom:2}}>⚡ <span style={{color:T.brand}}>VAJRA</span></div>
-        <div style={{fontSize:11,color:T.subtle,marginBottom:24}}>Options Scalping Terminal</div>
-        <div style={{fontSize:11,fontWeight:600,color:T.body,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.5px"}}>Select Broker</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20}}>
-          {BROKERS.map(b=>(
-            <button key={b} onPointerDown={()=>selectBroker(b)} style={{minHeight:44,padding:"8px",borderRadius:8,border:`1.5px solid ${broker===b?T.brand:T.line}`,background:broker===b?"#FFF3E0":T.surface,color:broker===b?T.brand:T.body,fontFamily:inter,fontWeight:600,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>{b}</button>
-          ))}
-        </div>
-        <div style={{borderTop:`1px solid ${T.line}`,paddingTop:14}}>
-          <div style={{fontSize:12,color:T.body,fontStyle:"italic",lineHeight:1.8,marginBottom:6}}>"{quote.text||"Perform your duty equipoised, abandoning all attachment."}"</div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>— {quote.src||"Bhagavad Gita 2.48"}</div>
-        </div>
-      </div>
-    </div>
-  )
-
-  // ── GITA ──────────────────────────────────────────────────────────────────
+  // ── GITA OVERLAY ──────────────────────────────────────────────────────────
   if(gitaMsg) return (
-    <div style={{position:"fixed",inset:0,background:"rgba(250,249,247,0.96)",zIndex:99999,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:inter}}>
+    <div style={{position:"fixed",inset:0,background:dark?"rgba(10,10,10,0.97)":"rgba(250,249,247,0.97)",zIndex:99999,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:inter}}>
       <div style={{fontSize:48,marginBottom:14}}>🕉️</div>
       <div style={{fontFamily:mono,fontSize:17,fontWeight:700,color:T.sell,marginBottom:8}}>PRAGNYA ACTIVATED</div>
       <div style={{fontSize:13,color:T.body,marginBottom:20,textAlign:"center",maxWidth:280,lineHeight:1.7}}>{gitaMsg}</div>
@@ -210,21 +225,117 @@ export default function App() {
 
   // ── MAIN ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter}}>
+    <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter,transition:"background .3s"}}>
+
+      {/* Toast */}
       {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"11px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center"}}>{toast.msg}</div>}
       {loading&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9998,height:2,background:T.brand}}/>}
 
+      {/* ── SIDE DRAWER OVERLAY ── */}
+      {drawer&&(
+        <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex"}}>
+          {/* Backdrop */}
+          <div style={{flex:1,background:T.overlay}} onPointerDown={()=>setDrawer(false)}/>
+          {/* Drawer */}
+          <div style={{width:300,background:T.drawerBg,height:"100%",overflowY:"auto",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)",transition:"transform .25s"}}>
+
+            {/* Drawer header */}
+            <div style={{padding:"16px 20px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
+              <button onPointerDown={()=>setDrawer(false)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent"}}>✕</button>
+            </div>
+
+            <div style={{flex:1,padding:"16px 20px",display:"flex",flexDirection:"column",gap:16}}>
+
+              {/* Account tile */}
+              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Account</div>
+                <div style={{fontSize:14,fontWeight:700,color:T.ink,marginBottom:2}}>{user?.name||"User"}</div>
+                <div style={{fontFamily:mono,fontSize:11,color:T.subtle,marginBottom:2}}>{user?.email||""}</div>
+                <div style={{display:"flex",gap:4,marginTop:6,flexWrap:"wrap"}}>
+                  {(user?.products||["VAJRA"]).map(p=>(
+                    <span key={p} style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.brand,background:dark?"#2A1A0A":"#FFF3E0",border:`1px solid ${T.brand}`,borderRadius:4,padding:"2px 6px"}}>{p}</span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Broker token tile */}
+              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Broker Token</div>
+                <div style={{marginBottom:8}}>
+                  <select value={broker} onChange={e=>{setBroker(e.target.value);localStorage.setItem("mtu_broker",e.target.value)}} style={{...selStyle,width:"100%",marginBottom:8}}>
+                    {BROKERS.map(b=><option key={b}>{b}</option>)}
+                  </select>
+                  <textarea
+                    value={brokerTok}
+                    onChange={e=>setBrokerTok(e.target.value)}
+                    placeholder="Paste your broker API access token here"
+                    rows={3}
+                    style={{width:"100%",border:`1px solid ${T.line}`,borderRadius:6,padding:"8px",fontFamily:mono,fontSize:11,color:T.ink,background:T.surface,outline:"none",resize:"none",boxSizing:"border-box"}}
+                  />
+                </div>
+                <button onPointerDown={saveBrokerToken} style={{width:"100%",minHeight:36,borderRadius:6,border:"none",background:tokSaved?T.buy:T.brand,color:"#fff",fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+                  {tokSaved?"✓ Saved":"Save Token"}
+                </button>
+                <div style={{fontFamily:mono,fontSize:9,color:T.subtle,marginTop:8,lineHeight:1.5}}>Token is stored locally on this device only. Never sent to MTU servers.</div>
+              </div>
+
+              {/* Appearance tile */}
+              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Appearance</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:T.ink}}>{dark?"Bloomberg Dark":"Warm Light"}</div>
+                    <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:2}}>{dark?"Black terminal, electric colors":"Off-white, warm professional"}</div>
+                  </div>
+                  {/* Toggle */}
+                  <div onPointerDown={()=>setDark(d=>!d)} style={{width:48,height:26,borderRadius:100,background:dark?"#FF8C00":T.line,cursor:"pointer",position:"relative",transition:"background .25s",flexShrink:0,WebkitTapHighlightColor:"transparent"}}>
+                    <div style={{position:"absolute",top:3,left:dark?24:3,width:20,height:20,borderRadius:100,background:"#fff",transition:"left .25s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
+                  </div>
+                </div>
+              </div>
+
+              {/* PRAGNYA tile */}
+              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>PRAGNYA Rules</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  {[["Max Trades",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
+                    <div key={l}>
+                      <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",marginBottom:2}}>{l}</div>
+                      <div style={{fontFamily:mono,fontSize:16,fontWeight:700,color:T.ink}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Gita tile */}
+              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:8}}>Today's Verse</div>
+                <div style={{fontSize:12,color:T.body,fontStyle:"italic",lineHeight:1.8}}>"{quote.text}"</div>
+                <div style={{fontFamily:mono,fontSize:9,color:T.subtle,marginTop:6}}>— {quote.src}</div>
+              </div>
+            </div>
+
+            {/* Sign out — bottom */}
+            <div style={{padding:"16px 20px",borderTop:`1px solid ${T.line}`}}>
+              <button onPointerDown={handleLogout} style={{width:"100%",minHeight:44,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:14,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── HEADER ── */}
-      <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 12px",height:44,display:"flex",alignItems:"center",gap:8,position:"sticky",top:0,zIndex:100}}>
+      <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 12px",height:44,display:"flex",alignItems:"center",gap:8,position:"sticky",top:0,zIndex:100,transition:"background .3s"}}>
         <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink,flexShrink:0}}>⚡ <span style={{color:T.brand}}>VAJRA</span></div>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        <button onPointerDown={()=>setScreen("broker")} style={{fontFamily:inter,fontSize:11,fontWeight:600,color:T.body,background:T.raised,border:`1px solid ${T.line}`,borderRadius:5,padding:"3px 8px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",flexShrink:0}}>
-          {broker} ▾
+        <button onPointerDown={()=>setBroker(b=>b)} style={{fontFamily:inter,fontSize:11,fontWeight:600,color:T.body,background:T.raised,border:`1px solid ${T.line}`,borderRadius:5,padding:"3px 8px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",flexShrink:0}}>
+          {broker||"Broker"} ▾
         </button>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        {/* Prices — scrollable */}
+        {/* Prices */}
         <div style={{display:"flex",gap:12,alignItems:"center",overflowX:"auto",flex:1,scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
-          <style>{`.no-scroll::-webkit-scrollbar{display:none}`}</style>
           {[
             {n:"SENSEX",ltp:sensex?.ltp,chg:sensex?.change||0,pct:sensex?.pct||0},
             {n:"NIFTY", ltp:nifty?.ltp,chg:0,pct:0},
@@ -240,6 +351,7 @@ export default function App() {
           ))}
         </div>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
+        {/* Stats */}
         <div style={{display:"flex",gap:10,flexShrink:0}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px"}}>P&L</div>
@@ -250,54 +362,74 @@ export default function App() {
             <div style={{fontFamily:mono,fontSize:12,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down}}>{dscore}/100</div>
           </div>
         </div>
+        <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
+        {/* Settings gear */}
+        <button onPointerDown={()=>setDrawer(true)} style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.line}`,background:T.raised,color:T.subtle,fontSize:16,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>⚙️</button>
       </div>
 
-      {/* ── CONTROLS — horizontal scroll ── */}
-      <div style={{background:T.raised,borderBottom:`1px solid ${T.line}`,overflowX:"auto",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
-        <div style={{display:"flex",gap:8,alignItems:"flex-end",padding:"6px 12px",minWidth:"max-content"}}>
-          <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,minWidth:80}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
-          <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,minWidth:105}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
-          <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,minWidth:105}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
-          <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,minWidth:105}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
-          <div>
-            {lbl("Qty")}
-            <div style={{display:"flex",alignItems:"center",background:T.surface,border:`1px solid ${T.line}`,borderRadius:6,height:32}}>
-              <button onPointerDown={()=>setQty(q=>Math.max(1,q-1))} style={{width:28,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>−</button>
-              <span style={{fontFamily:mono,minWidth:24,textAlign:"center",fontWeight:700,fontSize:13,color:T.ink}}>{qty}</span>
-              <button onPointerDown={()=>setQty(q=>q+1)} style={{width:28,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>+</button>
+      {/* ── CONTROLS — 2x4 grid mobile, row desktop ── */}
+      <div style={{background:T.raised,borderBottom:`1px solid ${T.line}`,padding:"8px 12px",transition:"background .3s"}}>
+        {isMobile ? (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 10px"}}>
+            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
+            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
+            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>
+              {lbl("Qty (Lots)")}
+              <div style={{display:"flex",alignItems:"center",background:T.surface,border:`1px solid ${T.line}`,borderRadius:6,height:32}}>
+                <button onPointerDown={()=>setQty(q=>Math.max(1,q-1))} style={{flex:1,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>−</button>
+                <span style={{fontFamily:mono,minWidth:24,textAlign:"center",fontWeight:700,fontSize:13,color:T.ink}}>{qty}</span>
+                <button onPointerDown={()=>setQty(q=>q+1)} style={{flex:1,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>+</button>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
+              <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
             </div>
           </div>
-          <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:52}}/></div>
-          <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:52}}/></div>
-        </div>
+        ):(
+          <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,minWidth:80,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
+            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
+            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>
+              {lbl("Qty")}
+              <div style={{display:"flex",alignItems:"center",background:T.surface,border:`1px solid ${T.line}`,borderRadius:6,height:32}}>
+                <button onPointerDown={()=>setQty(q=>Math.max(1,q-1))} style={{width:28,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>−</button>
+                <span style={{fontFamily:mono,minWidth:24,textAlign:"center",fontWeight:700,fontSize:13,color:T.ink}}>{qty}</span>
+                <button onPointerDown={()=>setQty(q=>q+1)} style={{width:28,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>+</button>
+              </div>
+            </div>
+            <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:56,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
+            <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:56,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
+          </div>
+        )}
       </div>
 
-      {/* ── TRADING PANEL — mobile: stacked, desktop: 3 col ── */}
+      {/* ── TRADING PANEL ── */}
       {isMobile ? (
-        /* MOBILE LAYOUT */
-        <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`}}>
-          {/* Index spot — full width */}
+        <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,transition:"background .3s"}}>
+          {/* Spot row */}
           <div style={{padding:"10px 12px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
               <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:2}}>{symbol} Spot</div>
               <div style={{fontFamily:mono,fontSize:28,fontWeight:700,color:T.ink,lineHeight:1,letterSpacing:"-0.5px"}}>{indexLtp?.toLocaleString("en-IN",{maximumFractionDigits:2})||"—"}</div>
               <div style={{fontFamily:mono,fontSize:11,fontWeight:600,color:indexChg>=0?T.up:T.down,marginTop:2}}>{indexChg>=0?"+":""}{indexChg.toFixed(2)} ({indexPct>=0?"+":""}{indexPct.toFixed(2)}%)</div>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",marginBottom:4}}>VIX {vix?.toFixed(2)||"—"}</div>
-              <div style={{padding:"6px 10px",border:`1px solid ${T.line}`,borderRadius:6,background:T.raised}}>
-                <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>Pragnya</div>
-                <div style={{fontFamily:mono,fontSize:12,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down}}>{dscore}/100</div>
-                <div style={{background:T.line,borderRadius:100,height:3,marginTop:3,width:80}}>
-                  <div style={{width:`${dscore}%`,height:"100%",background:dscore>=80?T.up:dscore>=50?T.warn:T.down,borderRadius:100}}/>
-                </div>
+            <div style={{padding:"8px 12px",border:`1px solid ${T.line}`,borderRadius:8,background:T.raised,textAlign:"right"}}>
+              <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Pragnya</div>
+              <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down,marginBottom:4}}>{dscore}/100</div>
+              <div style={{background:T.line,borderRadius:100,height:3,width:80}}>
+                <div style={{width:`${dscore}%`,height:"100%",background:dscore>=80?T.up:dscore>=50?T.warn:T.down,borderRadius:100}}/>
               </div>
+              <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginTop:4}}>{st.trades_taken||0}/{cfg.max_trades_per_day||4} trades · SL {st.sl_hits||0}/{cfg.max_sl_hits||2}</div>
             </div>
           </div>
-
-          {/* CE + PE side by side */}
+          {/* CE + PE */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:`1px solid ${T.line}`}}>
-            <div style={{padding:"10px 10px",borderRight:`1px solid ${T.line}`}}>
+            <div style={{padding:"10px",borderRight:`1px solid ${T.line}`}}>
               <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:2}}>{symbol} {ceStrike} CE</div>
               <div style={{fontFamily:mono,fontSize:30,fontWeight:700,color:T.ink,lineHeight:1,letterSpacing:"-0.5px",marginBottom:2}}>{ceLtp!=null?ceLtp:"—"}</div>
               <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginBottom:10}}>Lot {instr.lot} · {instr.expiry_day}</div>
@@ -306,7 +438,7 @@ export default function App() {
                 <ExecBtn text="↑ Buy Call"  sub={ceLtp?`₹${ceLtp}`:""} onClick={()=>execute("Buy Call")}  color={T.buy}/>
               </div>
             </div>
-            <div style={{padding:"10px 10px"}}>
+            <div style={{padding:"10px"}}>
               <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:2,textAlign:"right"}}>{symbol} {peStrike} PE</div>
               <div style={{fontFamily:mono,fontSize:30,fontWeight:700,color:T.ink,lineHeight:1,letterSpacing:"-0.5px",marginBottom:2,textAlign:"right"}}>{peLtp!=null?peLtp:"—"}</div>
               <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginBottom:10,textAlign:"right"}}>VIX {vix?.toFixed(2)||"—"}</div>
@@ -316,16 +448,14 @@ export default function App() {
               </div>
             </div>
           </div>
-
-          {/* Close all row */}
+          {/* Close all */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,padding:"8px 10px"}}>
-            <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"#FFF5F5",color:T.sell,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All</button>
-            <button onPointerDown={()=>showToast("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:T.raised,color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel Orders</button>
+            <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All</button>
+            <button onPointerDown={()=>showToast("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel Orders</button>
           </div>
         </div>
-      ) : (
-        /* DESKTOP LAYOUT — 3 columns */
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",background:T.surface,borderBottom:`1px solid ${T.line}`}}>
+      ):(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",background:T.surface,borderBottom:`1px solid ${T.line}`,transition:"background .3s"}}>
           <div style={{padding:"14px",borderRight:`1px solid ${T.line}`}}>
             <div style={{fontFamily:mono,fontSize:9,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>{symbol} {ceStrike} CE</div>
             <div style={{fontFamily:mono,fontSize:42,fontWeight:700,color:T.ink,lineHeight:1,letterSpacing:"-1px",marginBottom:3}}>{ceLtp!=null?ceLtp:"—"}</div>
@@ -342,8 +472,8 @@ export default function App() {
               <div style={{fontFamily:mono,fontSize:13,fontWeight:600,color:indexChg>=0?T.up:T.down,marginTop:5}}>{indexChg>=0?"+":""}{indexChg.toFixed(2)} ({indexPct>=0?"+":""}{indexPct.toFixed(2)}%)</div>
             </div>
             <div style={{width:"100%",display:"flex",flexDirection:"column",gap:6,margin:"10px 0"}}>
-              <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"#FFF5F5",color:T.sell,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All Positions</button>
-              <button onPointerDown={()=>showToast("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:T.raised,color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel All Orders</button>
+              <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All Positions</button>
+              <button onPointerDown={()=>showToast("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel All Orders</button>
             </div>
             <div style={{width:"100%",padding:"8px 10px",border:`1px solid ${T.line}`,borderRadius:8,background:T.raised}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -372,11 +502,11 @@ export default function App() {
         </div>
       )}
 
-      {/* ── TABS + TABLE ── */}
+      {/* ── TABS ── */}
       <div style={{padding:"0 12px 40px"}}>
         <div style={{display:"flex",alignItems:"center",borderBottom:`1px solid ${T.line}`}}>
-          {[["positions","Positions"],["orders","Orders"],["journal","Trade Book"],["config","Config"]].map(([k,l])=>(
-            <button key={k} onPointerDown={()=>setTab(k)} style={{minHeight:40,padding:"0 10px",border:"none",borderBottom:tab===k?`2px solid ${T.brand}`:"2px solid transparent",background:"none",color:tab===k?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",marginBottom:-1,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>{l}</button>
+          {[["positions","Positions"],["orders","Orders"],["journal","Trade Book"]].map(([k,l])=>(
+            <button key={k} onPointerDown={()=>setTab(k)} style={{minHeight:40,padding:"0 12px",border:"none",borderBottom:tab===k?`2px solid ${T.brand}`:"2px solid transparent",background:"none",color:tab===k?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",marginBottom:-1,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>{l}</button>
           ))}
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
             <span style={{fontFamily:mono,fontSize:9,color:T.subtle}}>MTM</span>
@@ -397,14 +527,11 @@ export default function App() {
                 const mtm=curLtp?(p.direction==="SELL"?p.entry-curLtp:curLtp-p.entry)*instr.lot*lots:0
                 return(
                   <div key={p.id} style={{display:"grid",gridTemplateColumns:"2fr .7fr .7fr .7fr .7fr 1fr",padding:"9px 4px",borderBottom:`1px solid ${T.line}`,alignItems:"center",background:T.surface}}>
-                    <div>
-                      <div style={{fontFamily:mono,fontWeight:700,fontSize:11,color:T.ink}}>{p.instrument}</div>
-                      <div style={{fontSize:10,color:p.direction==="SELL"?T.sell:T.buy,fontWeight:600}}>{p.direction}</div>
-                    </div>
-                    <div style={{fontFamily:mono,fontSize:11,fontWeight:600,color:T.ink}}>{lots*instr.lot}</div>
-                    <div style={{fontFamily:mono,fontSize:11,fontWeight:600,color:T.ink}}>{p.entry?.toFixed(0)}</div>
+                    <div><div style={{fontFamily:mono,fontWeight:700,fontSize:11,color:T.ink}}>{p.instrument}</div><div style={{fontSize:10,color:p.direction==="SELL"?T.sell:T.buy,fontWeight:600}}>{p.direction}</div></div>
+                    <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{lots*instr.lot}</div>
+                    <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{p.entry?.toFixed(0)}</div>
                     <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:mtm>=0?T.up:T.down}}>{curLtp||"—"}</div>
-                    <div style={{fontFamily:mono,fontSize:11,fontWeight:600,color:T.sell}}>{p.sl?.toFixed(0)}</div>
+                    <div style={{fontFamily:mono,fontSize:11,color:T.sell}}>{p.sl?.toFixed(0)}</div>
                     <div style={{display:"flex",gap:4}}>
                       <button onPointerDown={()=>closePos(p.id,curLtp||p.target_price,"TARGET")} style={{minHeight:28,padding:"0 6px",borderRadius:5,border:"none",background:T.buy,color:"#fff",fontSize:10,fontWeight:600,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Exit</button>
                       <button onPointerDown={()=>closePos(p.id,p.sl,"SL")} style={{minHeight:28,padding:"0 6px",borderRadius:5,border:"none",background:T.sell,color:"#fff",fontSize:10,fontWeight:600,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>SL</button>
@@ -416,7 +543,7 @@ export default function App() {
           </div>
         )}
 
-        {tab==="orders"&&<div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>Live order sync with {broker} — Phase 2</div>}
+        {tab==="orders"&&<div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>Live order sync — Phase 2</div>}
 
         {tab==="journal"&&(
           <div>
@@ -426,7 +553,7 @@ export default function App() {
             {(pragnya?.trades||[]).filter(t=>t.status==="CLOSED").length===0
               ?<div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>No closed trades today</div>
               :(pragnya?.trades||[]).filter(t=>t.status==="CLOSED").map(t=>(
-                <div key={t.id} style={{display:"grid",gridTemplateColumns:"2fr .6fr .7fr .7fr .8fr .6fr",padding:"9px 4px",borderBottom:`1px solid ${T.line}`,alignItems:"center",background:t.pnl>=0?"#F6FBF6":"#FDF6F6"}}>
+                <div key={t.id} style={{display:"grid",gridTemplateColumns:"2fr .6fr .7fr .7fr .8fr .6fr",padding:"9px 4px",borderBottom:`1px solid ${T.line}`,alignItems:"center",background:t.pnl>=0?(dark?"#0A1A0A":"#F6FBF6"):(dark?"#1A0A0A":"#FDF6F6")}}>
                   <div style={{fontFamily:mono,fontWeight:700,fontSize:11,color:T.ink}}>{t.instrument}</div>
                   <div style={{fontSize:10,color:t.direction==="SELL"?T.sell:T.buy,fontWeight:600}}>{t.direction}</div>
                   <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{t.entry?.toFixed(0)}</div>
@@ -436,24 +563,6 @@ export default function App() {
                 </div>
               ))
             }
-          </div>
-        )}
-
-        {tab==="config"&&(
-          <div style={{padding:"14px 0"}}>
-            <div style={{fontSize:12,fontWeight:700,color:T.ink,marginBottom:10}}>PRAGNYA Rules</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-              {[["Max Trades/Day",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Daily Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
-                <div key={l} style={{background:T.raised,padding:"10px 12px",borderRadius:8,border:`1px solid ${T.line}`}}>
-                  <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>{l}</div>
-                  <div style={{fontFamily:mono,fontSize:18,fontWeight:700,color:T.ink}}>{v}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{background:T.raised,borderRadius:8,padding:12,border:`1px solid ${T.line}`}}>
-              <div style={{fontSize:12,color:T.body,fontStyle:"italic",lineHeight:1.8}}>"{quote.text}"</div>
-              <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:6}}>— {quote.src}</div>
-            </div>
           </div>
         )}
       </div>
