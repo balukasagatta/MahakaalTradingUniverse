@@ -260,10 +260,17 @@ export default function App({ user, onLogout }) {
       })
     }).then(r => {
       if (r?.status === "ok") {
-        // Replace temp position with real one from server
         apiFetch("/vajra/state").then(pr => {
-          if (pr?.trades) setPos(pr.trades.filter(t=>t.status==="OPEN"))
           if (pr) setPragnya(pr)
+          if (pr?.trades) {
+            const realTrade = pr.trades.find(t =>
+              t.status==="OPEN" &&
+              t.instrument===instrKey &&
+              t.direction===action &&
+              !posRef.current.find(p => p.id===t.id)
+            )
+            if (realTrade) setPos(prev => prev.map(p => p.id===tempId ? realTrade : p))
+          }
         })
       } else {
         // Rollback temp on failure
