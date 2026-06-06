@@ -58,6 +58,7 @@ export default function App({ user, onLogout }) {
   const [gitaMsg,   setGitaMsg]   = useState(null)
   const [loading,   setLoading]   = useState(false)
   const [isMobile,  setIsMobile]  = useState(window.innerWidth < 768)
+  const [brokerOk,   setBrokerOk]  = useState(false)
   const [drawerTab, setDrawerTab] = useState("broker") // broker | appearance | pragnya | gita
 
   const T = dark ? DARK : LIGHT
@@ -72,6 +73,7 @@ export default function App({ user, onLogout }) {
     if(meta) meta.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
     const onResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener("resize", onResize)
+    const tk=localStorage.getItem("mtu_token"); if(tk){fetch("https://mtutrade.in/api/auth/broker/my-brokers",{headers:{"Authorization":"Bearer "+tk},credentials:"include"}).then(r=>r.json()).then(d=>{if(d.brokers&&Object.keys(d.brokers).length>0)setBrokerOk(true)}).catch(()=>{})}
     // Handle broker OAuth callback
     const params = new URLSearchParams(window.location.search)
     if(params.get("broker_success")) {
@@ -391,6 +393,7 @@ export default function App({ user, onLogout }) {
 
       {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"11px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center",fontFamily:inter}}>{toast.msg}</div>}
       {loading&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9998,height:2,background:T.brand}}/>}
+      {!brokerOk&&appScreen==="terminal"&&(<div onPointerDown={()=>setAppScreen("settings")} style={{background:"#7B5800",color:"#fff",padding:"9px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}><span style={{fontFamily:"Inter,sans-serif",fontSize:12,fontWeight:600}}>{"⚠️ No broker connected — market data unavailable"}</span><span style={{fontFamily:"Inter,sans-serif",fontSize:12,fontWeight:700}}>{"Connect →"}</span></div>)}
 
       {/* Side drawer */}
       {drawer&&(

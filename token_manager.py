@@ -50,3 +50,14 @@ def get_dhan_token(email: str = None) -> str:
 
 def get_upstox_api_key() -> str:
     return _read_env().get("UPSTOX_API_KEY", "92c6ea83-b7dc-44f3-b286-f89b1d9f5f6e")
+
+def mark_token_expired(email: str, broker: str):
+    """Called when API returns 401 — marks token as expired"""
+    if not email or not os.path.exists(TOKENS_PATH):
+        return
+    try:
+        tokens = json.load(open(TOKENS_PATH))
+        if email in tokens and broker in tokens[email]:
+            tokens[email][broker]["status"] = "expired"
+            json.dump(tokens, open(TOKENS_PATH,"w"), indent=2)
+    except: pass

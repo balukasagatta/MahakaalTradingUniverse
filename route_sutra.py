@@ -49,6 +49,9 @@ async def _get(url: str, email: str = None) -> dict:
         r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
         if r.status_code == 200:
             return r.json()
+        if r.status_code == 401 and email:
+            from token_manager import mark_token_expired
+            mark_token_expired(email, "upstox")
         raise HTTPException(r.status_code, f"Upstox error: {r.text[:200]}")
 
 @router.get("/indices")

@@ -70,10 +70,21 @@ export default function BrokerConnect({ T, user, onConnected }) {
                     <span style={{fontSize:18}}>{info?.logo}</span>
                     <div>
                       <div style={{fontFamily:inter,fontWeight:700,fontSize:13,color:T.ink}}>{info?.name}</div>
-                      <div style={{fontFamily:mono,fontSize:9,color:T.buy,fontWeight:600}}>✓ Connected · {data.connected_at?.slice(0,10)}</div>
+                      {data.expired
+                        ?<div style={{fontFamily:mono,fontSize:9,color:"#E65100",fontWeight:700}}>⚠️ Session expired · Reconnect</div>
+                        :<div style={{fontFamily:mono,fontSize:9,color:T.buy,fontWeight:600}}>✓ Connected · {data.connected_at?.slice(0,10)}</div>
+                      }
                     </div>
                   </div>
-                  <button onPointerDown={()=>disconnect(key)} style={{fontFamily:inter,fontSize:11,fontWeight:600,color:T.sell,background:"none",border:`1px solid ${T.sell}`,borderRadius:5,padding:"4px 10px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Disconnect</button>
+                  <div style={{display:"flex",gap:6}}>
+                    {data.expired&&(
+                      <button onPointerDown={()=>{ const jwt=localStorage.getItem("mtu_token"); window.location.href=`https://mtutrade.in/api/auth/broker/connect/${key}?token=${jwt}` }}
+                        style={{fontFamily:inter,fontSize:11,fontWeight:700,color:"#fff",background:"#E65100",border:"none",borderRadius:5,padding:"4px 10px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+                        Reconnect
+                      </button>
+                    )}
+                    <button onPointerDown={()=>disconnect(key)} style={{fontFamily:inter,fontSize:11,fontWeight:600,color:T.sell,background:"none",border:`1px solid ${T.sell}`,borderRadius:5,padding:"4px 10px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Disconnect</button>
+                  </div>
                 </div>
               )
             })}
