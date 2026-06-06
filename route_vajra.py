@@ -1,7 +1,7 @@
 """
 VAJRA API Routes — Sensex scalping
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import httpx, json, os
@@ -45,8 +45,8 @@ def load_cfg():
         return merged
     return DEFAULT_CFG.copy()
 
-async def fetch_ltp_multi(keys: list) -> dict:
-    token = get_upstox_token()
+async def fetch_ltp_multi(keys: list, email: str = None) -> dict:
+    token = get_upstox_token(email)
     url   = "https://api.upstox.com/v3/market-quote/ltp?instrument_key=" + ",".join(keys)
     async with httpx.AsyncClient(timeout=5) as client:
         r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
@@ -64,8 +64,17 @@ def parse_ltp(data: dict, key: str) -> dict:
     return {"ltp": ltp, "close": close, "change": chg, "pct": pct}
 
 @router.get("/market")
-async def get_market():
-    data   = await fetch_ltp_multi(["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50", "NSE_INDEX|India VIX"])
+async def get_market(request: Request):
+    email = None
+    try:
+        from route_auth import verify_token
+        token = request.cookies.get("mtu_token")
+        if not token:
+            auth = request.headers.get("authorization","")
+            if auth.startswith("Bearer "): token = auth[7:]
+        if token: email = verify_token(token)["sub"]
+    except: pass
+    data   = await fetch_ltp_multi(["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50", "NSE_INDEX|India VIX"], email)
     sensex = parse_ltp(data, "BSE_INDEX|SENSEX")
     nifty  = parse_ltp(data, "NSE_INDEX|Nifty 50")
     vix_d  = parse_ltp(data, "NSE_INDEX|India VIX")

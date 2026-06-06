@@ -13,6 +13,7 @@ from route_auth    import router as auth_router
 from route_vajra   import router as vajra_router
 from route_sutra   import router as sutra_router
 from route_pragnya import router as pragnya_router
+from route_broker  import router as broker_router
 
 app = FastAPI(title="MTU Terminal API", version="1.0.0")
 
@@ -25,6 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router,    prefix="/api/auth",    tags=["Auth"])
+app.include_router(broker_router,  prefix="/api/auth/broker", tags=["Broker"])
 app.include_router(feed_router,    prefix="/api/feed",    tags=["Feed"])
 app.include_router(vajra_router,   prefix="/api/vajra",   tags=["VAJRA"])
 app.include_router(sutra_router,   prefix="/api/sutra",   tags=["SUTRA"])

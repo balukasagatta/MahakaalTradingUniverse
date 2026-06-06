@@ -1,7 +1,7 @@
 """
 SUTRA API Routes — Nifty options chain + strategy
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Request, HTTPException, Query
 from pydantic import BaseModel
 from typing import List
 import httpx, json, os
@@ -15,6 +15,20 @@ from pragnya_engine import (
 )
 
 router  = APIRouter()
+
+def _get_email(request) -> str:
+    if not request: return None
+    try:
+        from route_auth import verify_token
+        token = request.cookies.get("mtu_token")
+        if not token:
+            auth = request.headers.get("authorization","")
+            if auth.startswith("Bearer "): token = auth[7:]
+        if token: return verify_token(token)["sub"]
+    except: pass
+    return None
+
+
 import time as _time
 _chain_cache = {}
 _CACHE_TTL = 20
@@ -29,8 +43,8 @@ INDICES = {
     "MIDCPNIFTY": {"key": "NSE_INDEX|NIFTY MID SELECT",  "lot": 75,  "step": 25},
 }
 
-async def _get(url: str) -> dict:
-    token = get_upstox_token()
+async def _get(url: str, email: str = None) -> dict:
+    token = get_upstox_token(email)
     async with httpx.AsyncClient(timeout=8) as client:
         r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
         if r.status_code == 200:
@@ -42,22 +56,24 @@ async def get_indices():
     return list(INDICES.keys())
 
 @router.get("/expiries")
-async def get_expiries(index: str = "NIFTY"):
+async def get_expiries(index: str = "NIFTY", request: Request = None):
     if index not in INDICES:
         raise HTTPException(400, f"Unknown index: {index}")
     cache_key = f"exp_{index}"
     now = _time.time()
     if cache_key in _chain_cache and now - _chain_cache[cache_key]["ts"] < 300:
         return _chain_cache[cache_key]["data"]
-    data = await _get(f"https://api.upstox.com/v2/option/contract?instrument_key={INDICES[index]['key']}")
+    email = _get_email(request)
+    data = await _get(f"https://api.upstox.com/v2/option/contract?instrument_key={INDICES[index]['key']}", email)
     expiries = sorted(set(c["expiry"] for c in data.get("data", [])))
     result = {"index": index, "expiries": expiries}
     _chain_cache[cache_key] = {"data": result, "ts": now}
     return result
 
 @router.get("/chain")
-async def get_chain(index: str = "NIFTY", expiry: str = Query(...)):
-    cache_key = f"{index}_{expiry}"
+async def get_chain(index: str = "NIFTY", expiry: str = Query(...), request: Request = None):
+    email = _get_email(request)
+    cache_key = f"{email}_{index}_{expiry}"
     now = _time.time()
     if cache_key in _chain_cache and now - _chain_cache[cache_key]["ts"] < _CACHE_TTL:
         return _chain_cache[cache_key]["data"]
@@ -66,14 +82,15 @@ async def get_chain(index: str = "NIFTY", expiry: str = Query(...)):
     info = INDICES[index]
 
     # Spot price
-    ltp_data = await _get(f"https://api.upstox.com/v3/market-quote/ltp?instrument_key={info['key']}")
+    email = _get_email(request)
+    ltp_data = await _get(f"https://api.upstox.com/v3/market-quote/ltp?instrument_key={info['key']}", email)
     spot = 0.0
     for v in ltp_data.get("data", {}).values():
         spot = float(v.get("last_price", 0))
         break
 
     # Option chain
-    chain_data = await _get(f"https://api.upstox.com/v2/option/chain?instrument_key={info['key']}&expiry_date={expiry}")
+    chain_data = await _get(f"https://api.upstox.com/v2/option/chain?instrument_key={info['key']}&expiry_date={expiry}", email)
     atm = round(spot / info["step"]) * info["step"]
 
     strikes = []
@@ -156,8 +173,8 @@ async def kill_switch():
 
 @router.get("/chain/atm")
 @router.get("/chain/atm")
-async def get_atm_chain(index: str = "NIFTY", expiry: str = Query(...), window: int = 15):
-    full = await get_chain(index, expiry)
+async def get_atm_chain(index: str = "NIFTY", expiry: str = Query(...), window: int = 15, request: Request = None):
+    full = await get_chain(index, expiry, request)
     atm = full["atm"]
     step = full["step"]
     filtered = [s for s in full["strikes"] if abs(s["strike"] - atm) <= window * step]
@@ -167,7 +184,8 @@ async def get_atm_chain(index: str = "NIFTY", expiry: str = Query(...), window: 
 async def get_option_ltp(ce_key: str, pe_key: str):
     """Fetch LTP for just 2 instrument keys — ultra fast"""
     keys = f"{ce_key},{pe_key}"
-    data = await _get(f"https://api.upstox.com/v3/market-quote/ltp?instrument_key={keys}")
+    email = _get_email(request)
+    data = await _get(f"https://api.upstox.com/v3/market-quote/ltp?instrument_key={keys}", email)
     result = {}
     for k, v in data.get("data", {}).items():
         result[k.replace(":", "|")] = v.get("last_price", 0)

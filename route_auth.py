@@ -14,7 +14,19 @@ router = APIRouter()
 IST = pytz.timezone("Asia/Kolkata")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-JWT_SECRET   = os.environ.get("MTU_JWT_SECRET", secrets.token_hex(32))
+def _load_jwt_secret():
+    secret = os.environ.get("MTU_JWT_SECRET")
+    if not secret:
+        env_path = os.path.expanduser("~/mahakaal/env.vars")
+        if os.path.exists(env_path):
+            for line in open(env_path):
+                if line.startswith("MTU_JWT_SECRET="):
+                    secret = line.strip().split("=",1)[1].strip().strip('"')
+                    break
+    if not secret:
+        secret = secrets.token_hex(32)
+    return secret
+JWT_SECRET = _load_jwt_secret()
 JWT_ALGO     = "HS256"
 JWT_EXPIRE_H = 12
 USERS_PATH   = os.path.expanduser("~/mahakaal/mtu_users.json")

@@ -36,6 +36,7 @@ const mono  = "'JetBrains Mono','Fira Mono',monospace"
 export default function App({ user, onLogout }) {
   const [dark,      setDark]      = useState(()=>localStorage.getItem("mtu_dark")==="1")
   const [drawer,    setDrawer]    = useState(false)
+  const [appScreen, setAppScreen] = useState("terminal") // terminal | settings
   const [symbol,    setSymbol]    = useState("SENSEX")
   const [expiries,  setExpiries]  = useState([])
   const [expiry,    setExpiry]    = useState("")
@@ -203,6 +204,70 @@ export default function App({ user, onLogout }) {
     </button>
   )
 
+  // ── SETTINGS SCREEN ──────────────────────────────────────────────────────────
+  if(appScreen==="settings") return (
+    <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter}}>
+      {/* Header */}
+      <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 16px",height:52,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
+        <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
+        <button onPointerDown={()=>setAppScreen("terminal")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent",padding:"8px"}}>✕</button>
+      </div>
+      <div style={{maxWidth:480,margin:"0 auto",padding:"16px"}}>
+        {/* Account */}
+        <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
+          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Account</div>
+          <div style={{fontFamily:inter,fontSize:15,fontWeight:700,color:T.ink,marginBottom:2}}>{user?.name||"User"}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:T.subtle,marginBottom:8}}>{user?.email||""}</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {(user?.products||["VAJRA"]).map(p=>(
+              <span key={p} style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.brand,background:dark?"#2A1A0A":"#FFF3E0",border:`1px solid ${T.brand}`,borderRadius:4,padding:"2px 8px"}}>{p}</span>
+            ))}
+          </div>
+        </div>
+        {/* Broker Connect */}
+        <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
+          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Broker Connection</div>
+          <BrokerConnect T={T} user={user} onConnected={(b)=>showToast(`✓ ${b} connected!`)}/>
+        </div>
+        {/* Appearance */}
+        <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
+          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Appearance</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontFamily:inter,fontSize:13,fontWeight:700,color:T.ink}}>{dark?"Bloomberg Dark":"Warm Light"}</div>
+              <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:2}}>{dark?"Black terminal, electric colors":"Off-white, warm professional"}</div>
+            </div>
+            <div onPointerDown={()=>setDark(d=>!d)} style={{width:48,height:26,borderRadius:100,background:dark?T.brand:T.line,cursor:"pointer",position:"relative",transition:"background .25s",flexShrink:0,WebkitTapHighlightColor:"transparent"}}>
+              <div style={{position:"absolute",top:3,left:dark?24:3,width:20,height:20,borderRadius:100,background:"#fff",transition:"left .25s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
+            </div>
+          </div>
+        </div>
+        {/* PRAGNYA */}
+        <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
+          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>PRAGNYA Rules</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[["Max Trades/Day",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Daily Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
+              <div key={l} style={{background:T.raised,padding:"10px 12px",borderRadius:8,border:`1px solid ${T.line}`}}>
+                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>{l}</div>
+                <div style={{fontFamily:mono,fontSize:18,fontWeight:700,color:T.ink}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Gita */}
+        <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:20}}>
+          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Today's Verse</div>
+          <div style={{fontSize:13,color:T.body,fontStyle:"italic",lineHeight:1.8}}>"{quote.text||"Perform your duty equipoised."}"</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:6}}>— {quote.src||"Bhagavad Gita 2.48"}</div>
+        </div>
+        {/* Sign out */}
+        <button onPointerDown={handleLogout} style={{width:"100%",minHeight:48,borderRadius:10,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:15,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  )
+
   // ── GITA OVERLAY ──────────────────────────────────────────────────────────
   if(gitaMsg) return (
     <div style={{position:"fixed",inset:0,background:dark?"rgba(10,10,10,0.97)":"rgba(250,249,247,0.97)",zIndex:99999,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:inter}}>
@@ -329,8 +394,7 @@ export default function App({ user, onLogout }) {
 
       {/* Side drawer */}
       {drawer&&(
-        <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
-          <div style={{flex:1,background:dark?"rgba(0,0,0,0.7)":"rgba(0,0,0,0.3)"}} onPointerDown={()=>setDrawer(false)}/>
+        <div style={{position:"fixed",inset:0,zIndex:1000,background:T.canvas,overflowY:"auto"}}>
           <DrawerContent/>
         </div>
       )}
@@ -366,7 +430,7 @@ export default function App({ user, onLogout }) {
             <div style={{fontFamily:mono,fontSize:12,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down}}>{dscore}/100</div>
           </div>
           <div style={{width:1,height:18,background:T.line}}/>
-          <button onPointerDown={()=>setDrawer(true)} style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.line}`,background:T.raised,color:T.subtle,fontSize:16,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",display:"flex",alignItems:"center",justifyContent:"center"}}>⚙️</button>
+          <button onPointerDown={()=>setAppScreen("settings")} style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.line}`,background:T.raised,color:T.subtle,fontSize:16,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",display:"flex",alignItems:"center",justifyContent:"center"}}>⚙️</button>
         </div>
       </div>
 

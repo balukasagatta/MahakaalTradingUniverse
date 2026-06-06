@@ -15,12 +15,16 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # ── Encryption key — generated once, stored in env.vars ───────────────────────
 def _get_fernet():
+    # Load from env.vars file directly
+    env_path = os.path.expanduser("~/mahakaal/env.vars")
     key = os.environ.get("MTU_ENCRYPT_KEY")
+    if not key and os.path.exists(env_path):
+        for line in open(env_path):
+            if line.startswith("MTU_ENCRYPT_KEY="):
+                key = line.strip().split("=",1)[1].strip().strip('"')
+                break
     if not key:
-        # Generate and save on first run
-        key = Fernet.generate_key().decode()
-        with open(os.path.expanduser("~/mahakaal/env.vars"), "a") as f:
-            f.write(f'\nMTU_ENCRYPT_KEY={key}\n')
+        raise RuntimeError("MTU_ENCRYPT_KEY not set in env.vars")
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 def _encrypt(text: str) -> str:
@@ -105,8 +109,17 @@ async def save_broker_creds(request: Request):
 
 # ── Connect — redirect to broker OAuth ────────────────────────────────────────
 @router.get("/connect/{broker}")
-async def broker_connect(broker: str, request: Request):
-    email = _get_user(request)
+async def broker_connect(broker: str, request: Request, token: str = None):
+    # Accept token via query param for browser redirects
+    if token:
+        from route_auth import verify_token
+        try:
+            payload = verify_token(token)
+            email = payload["sub"]
+        except:
+            raise HTTPException(401, "Invalid token.")
+    else:
+        email = _get_user(request)
     broker = broker.lower()
     if broker not in BROKER_CFG:
         raise HTTPException(400, f"Unknown broker: {broker}")
