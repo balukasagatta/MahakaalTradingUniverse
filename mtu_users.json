@@ -1,0 +1,14 @@
+{
+  "balu@mtutrade.in": {
+    "name": "Balu",
+    "password": "$2b$12$2Dv0/LgYS6LEOBxEBoI0BOokq4hXRHRlbm.NsARMCPvMLCwyyo0g6",
+    "products": [
+      "VAJRA",
+      "SUTRA",
+      "TARK"
+    ],
+    "active": true,
+    "created": "2026-06-05T22:37:52.827177+05:30",
+    "last_login": "2026-06-06T07:51:57.270050+05:30"
+  }
+}

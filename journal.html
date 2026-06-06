@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function(){
+  if(new URLSearchParams(window.location.search).get('embed')==='1'){
+    var s=document.createElement('style');
+    s.innerHTML='#nav{display:none!important}#app{padding-bottom:0!important}#header{top:0!important}';
+    document.addEventListener('DOMContentLoaded',function(){
+      document.head.appendChild(s);
+    });
+  }
+})();
+</script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>Mahakaal P&L</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:#FAFAF8;font-family:'DM Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+input,select,textarea,button{font-family:inherit}
+button{cursor:pointer}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:#D0CCC4;border-radius:4px}
+
+#app{max-width:480px;margin:0 auto;min-height:100vh;background:#FAFAF8;padding-bottom:80px;position:relative}
+
+/* screens */
+.screen{display:none;padding:16px}
+.screen.active{display:block}
+
+/* auth */
+#auth-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:#FAFAF8}
+.auth-box{background:#fff;border-radius:20px;padding:32px 24px;width:100%;max-width:320px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center}
+.auth-emoji{font-size:44px;margin-bottom:12px}
+.auth-title{font-family:'DM Serif Display',Georgia,serif;font-size:24px;color:#1A1A1A;margin-bottom:4px}
+.auth-sub{font-size:13px;color:#9A9A9A;margin-bottom:24px}
+.auth-err{font-size:12px;color:#C0392B;margin-bottom:8px;display:none}
+
+/* header */
+#header{background:#fff;padding:14px 16px 12px;border-bottom:1px solid #F0EEE8;position:sticky;top:0;z-index:50;display:none}
+.header-inner{display:flex;align-items:center;justify-content:space-between}
+.header-title{font-family:'DM Serif Display',Georgia,serif;font-size:20px;color:#1A1A1A}
+.header-sub{font-size:11px;color:#9A9A9A;margin-top:1px}
+.header-right{display:flex;align-items:center;gap:8px}
+.all-time-box{background:#FEF9EF;border:1px solid #F0DFA8;border-radius:10px;padding:6px 10px;text-align:right}
+.all-time-label{font-size:9px;color:#9A7A3A;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+.all-time-val{font-size:15px;font-weight:700}
+.gear-btn{border:1.5px solid #E8E6E0;border-radius:10px;background:#fff;padding:8px 10px;color:#5A5A5A;line-height:0}
+
+/* bottom nav */
+#nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:#fff;border-top:1px solid #F0EEE8;display:none;z-index:50}
+.nav-inner{display:flex;padding:4px 0 6px}
+.nav-btn{flex:1;border:none;background:none;padding:8px 2px;font-size:10px;font-weight:500;color:#9A9A9A;display:flex;flex-direction:column;align-items:center;gap:3px;transition:color .15s;text-decoration:none;cursor:pointer}
+.nav-btn.on{color:#C8A86B}
+.nav-btn svg{width:18px;height:18px}
+
+/* cards */
+.card{background:#fff;border-radius:16px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.06),0 0 0 1px rgba(0,0,0,.04);margin-bottom:12px}
+.stat-card{background:#fff;border-radius:14px;padding:12px 8px;box-shadow:0 1px 4px rgba(0,0,0,.06);text-align:center}
+.stat-icon{font-size:14px}
+.stat-label{font-size:9px;color:#9A9A9A;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin:4px 0 2px}
+.stat-val{font-size:14px;font-weight:700}
+
+/* section title */
+.section-title{font-family:'DM Serif Display',Georgia,serif;font-size:18px;color:#1A1A1A;margin-bottom:4px}
+
+/* fields */
+.field{width:100%;border:1.5px solid #E8E6E0;border-radius:10px;padding:10px 12px;font-size:14px;background:#FAFAF8;outline:none;transition:border .15s;color:#1A1A1A}
+.field:focus{border-color:#C8A86B;background:#fff}
+.field-sm{padding:8px 6px;font-size:13px;text-align:center}
+.field-xs{padding:8px 4px;font-size:13px;text-align:center}
+label.lbl{display:block;font-size:11px;font-weight:600;color:#9A9A9A;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+
+/* acc table */
+.acc-hdr,.acc-row{display:grid;grid-template-columns:0.9fr 1fr 1fr 0.65fr;gap:6px;align-items:center}
+.acc-hdr{margin-bottom:6px}
+.acc-hdr span{font-size:10px;color:#9A9A9A;font-weight:600;text-align:center}
+.acc-hdr span:first-child{text-align:left}
+.acc-row{padding:8px 0;border-top:1px solid #F5F3EE}
+.acc-row:first-of-type{border-top:none;padding-top:0}
+.acc-name{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#3A3A3A}
+.acc-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+
+/* toggles */
+.tog-row{display:flex;gap:8px}
+.tog{flex:1;border:1.5px solid #E8E6E0;border-radius:10px;padding:10px 6px;font-size:13px;font-weight:500;background:#fff;color:#5A5A5A;transition:all .15s}
+.tog.yes{background:#E8F5EE;border-color:#1A7A4A;color:#1A7A4A}
+.tog.no{background:#FDECEA;border-color:#C0392B;color:#C0392B}
+
+/* emotion grid */
+.emo-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.emo-btn{border:1.5px solid #E8E6E0;border-radius:10px;padding:8px 4px;font-size:12px;background:#fff;color:#5A5A5A;transition:all .15s}
+.emo-btn.sel{background:#FEF9EF;border-color:#C8A86B;color:#9A7A3A;font-weight:600}
+
+/* tags */
+.tag{display:inline-block;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600}
+.tag-red{background:#FDECEA;color:#C0392B}
+.tag-green{background:#E8F5EE;color:#1A7A4A}
+
+/* hist rows */
+.hist-row{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:8px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.hist-row:active{opacity:.85}
+.hist-main{display:flex;justify-content:space-between;align-items:flex-start}
+.hist-left{flex:1}
+.hist-date{font-size:13px;font-weight:700;color:#1A1A1A}
+.hist-mood{font-size:11px;color:#9A9A9A;margin-top:3px}
+.hist-meta{display:flex;gap:10px;margin-top:5px;flex-wrap:wrap}
+.hist-meta span{font-size:11px;color:#6B6B6B}
+.hist-right{display:flex;align-items:center;gap:4px}
+.hist-amt{font-size:15px;font-weight:800}
+.hist-chevron{color:#D0D0D0;font-size:18px}
+
+/* detail */
+.det-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #F0EEE8}
+.det-row:last-child{border-bottom:none}
+
+/* cricket board */
+.cricket-board{background:linear-gradient(135deg,#1A1A2E 0%,#16213E 100%);border-radius:18px;padding:20px;margin-bottom:14px;color:#fff;position:relative;overflow:hidden}
+.cricket-board::before{content:'';position:absolute;top:-30px;right:-30px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.04)}
+.cricket-score{display:flex;align-items:baseline;gap:6px;margin:8px 0}
+.score-cleared{font-family:'DM Serif Display',Georgia,serif;font-size:32px;font-weight:800;color:#C8A86B;letter-spacing:-1px}
+.score-sep{font-size:20px;color:rgba(255,255,255,.3);font-weight:300}
+.score-total{font-size:18px;font-weight:700;color:rgba(255,255,255,.6)}
+.score-pct{margin-left:auto;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-size:18px;font-weight:800}
+.progress-track{height:8px;background:rgba(255,255,255,.12);border-radius:100px;overflow:hidden;margin:10px 0}
+.progress-fill{height:100%;border-radius:100px;transition:width .5s ease}
+.cricket-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:4px}
+.c-stat{background:rgba(255,255,255,.06);border-radius:10px;padding:8px}
+.c-stat-label{font-size:9px;color:rgba(255,255,255,.4);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.c-stat-val{font-size:13px;font-weight:700;margin-top:2px}
+
+/* outflow mini on dashboard */
+.out-mini{background:linear-gradient(135deg,#1A1A2E,#16213E);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.out-mini:active{opacity:.9}
+.out-mini-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.out-mini-label{font-size:12px;color:rgba(255,255,255,.6);font-weight:600}
+.out-mini-pct{font-size:11px;color:#C8A86B;font-weight:700}
+.out-mini-score{display:flex;align-items:baseline;gap:4px;margin-bottom:8px}
+.out-mini-cleared{font-size:22px;font-weight:800;color:#C8A86B}
+.out-mini-footer{display:flex;justify-content:space-between;margin-top:6px}
+.out-mini-footer span{font-size:10px}
+
+/* expense rows */
+.exp-cat-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.exp-row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid #F5F3EE;transition:opacity .2s}
+.exp-row:last-child{border-bottom:none}
+.exp-row.paid{opacity:.4}
+.exp-left{display:flex;align-items:center;gap:12px}
+.exp-check{width:26px;height:26px;border-radius:8px;border:2px solid #E0DDD8;background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;flex-shrink:0}
+.exp-check.ticked{background:#1A7A4A;border-color:#1A7A4A}
+.exp-name{font-size:13px;font-weight:500;color:#1A1A1A;transition:all .2s}
+.exp-name.paid{text-decoration:line-through;color:#9A9A9A}
+.exp-amt{font-size:14px;font-weight:700;color:#1A1A1A;transition:color .2s}
+.exp-amt.paid{color:#9A9A9A}
+
+/* trading target bar */
+.target-bar-track{height:6px;background:#F0EEE8;border-radius:100px;overflow:hidden;margin:10px 0 6px}
+.target-bar-fill{height:100%;border-radius:100px;transition:width .5s}
+
+/* toast */
+#toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#1A1A1A;color:#fff;padding:9px 20px;border-radius:100px;font-size:13px;font-weight:500;z-index:200;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.25);display:none;animation:slideUp .2s ease}
+#toast.err{background:#C0392B}
+@keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+
+/* modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:none;align-items:flex-end;justify-content:center}
+.modal-bg.open{display:flex}
+.modal-box{background:#fff;border-radius:20px 20px 0 0;padding:24px;width:100%;max-width:480px}
+.modal-title{font-family:'DM Serif Display',Georgia,serif;font-size:20px;margin-bottom:8px}
+
+/* utility */
+.green{color:#1A7A4A} .red{color:#C0392B} .gold{color:#C8A86B} .grey{color:#9A9A9A}
+.fw7{font-weight:700} .fw8{font-weight:800}
+.fs11{font-size:11px} .fs12{font-size:12px} .fs13{font-size:13px} .fs14{font-size:14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.flex-sb{display:flex;justify-content:space-between;align-items:center}
+.mt4{margin-top:4px} .mt6{margin-top:6px} .mt8{margin-top:8px} .mt10{margin-top:10px} .mt12{margin-top:12px} .mt14{margin-top:14px} .mt16{margin-top:16px} .mt18{margin-top:18px} .mt20{margin-top:20px}
+.mb8{margin-bottom:8px} .mb10{margin-bottom:10px} .mb12{margin-bottom:12px} .mb14{margin-bottom:14px}
+.back-btn{border:none;background:#F0EEE8;border-radius:8px;padding:6px 10px;font-size:13px;color:#5A5A5A}
+.btn-primary{width:100%;background:#1A1A1A;color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700}
+.btn-danger{width:100%;background:#fff;color:#C0392B;border:1.5px solid #F5CECA;border-radius:12px;padding:12px;font-size:14px;font-weight:600}
+.btn-ghost{width:100%;background:#fff;color:#3A3A3A;border:1.5px solid #E8E6E0;border-radius:12px;padding:14px;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn-reset{width:100%;background:#fff;color:#9A9A9A;border:1.5px solid #E8E6E0;border-radius:12px;padding:12px;font-size:13px;font-weight:600}
+.acc-breakdown-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #F5F3EE}
+.acc-breakdown-row:last-child{border-bottom:none}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- AUTH -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <div class="auth-emoji">📊</div>
+    <div class="auth-title">Mahakaal P&L</div>
+    <div class="auth-sub">Trading Universe Tracker</div>
+    <div class="auth-err" id="auth-err">Wrong password</div>
+    <input class="field" type="password" id="auth-pass" placeholder="Enter password" style="text-align:center;font-size:16px;letter-spacing:4px;margin-bottom:12px"/>
+    <button class="btn-primary" onclick="doAuth()">Unlock</button>
+  </div>
+</div>
+
+<!-- HEADER -->
+<div id="header">
+  <div class="header-inner">
+    <div>
+      <div class="header-title">Mahakaal P&L</div>
+      <div class="header-sub" id="hdr-sub">0 entries · <span style="color:#1A7A4A;font-weight:600">Auto-saved ✓</span></div>
+    </div>
+    <div class="header-right">
+      <div class="all-time-box">
+        <div class="all-time-label">All-Time Net</div>
+        <div class="all-time-val" id="hdr-alltime">—</div>
+      </div>
+      <button class="gear-btn" onclick="openSettings()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="screen-dashboard" class="screen">
+  <div class="section-title">This Month</div>
+  <div id="dash-month-sub" class="grey fs12 mb12"></div>
+  <div class="grid3 mb12" id="dash-stats"></div>
+  <div id="dash-out-mini" class="out-mini mb12" onclick="goTab('outflow')"></div>
+  <div class="card mb12" id="dash-acc-card"></div>
+  <div id="dash-recent"></div>
+</div>
+
+<!-- ADD ENTRY -->
+<div id="screen-add" class="screen">
+  <div class="flex-sb mb14">
+    <button class="back-btn" onclick="goTab('dashboard');resetForm()">← Back</button>
+    <div class="section-title" id="add-title">New Entry</div>
+    <div style="width:60px"></div>
+  </div>
+  <label class="lbl">Date</label>
+  <input type="date" class="field mb12" id="entry-date"/>
+
+  <label class="lbl">Account P&L</label>
+  <div class="card mb12" style="padding:12px 10px">
+    <div class="acc-hdr">
+      <span style="text-align:left">Account</span>
+      <span>Gross (N)</span><span>Net (N+1)</span><span># Trades</span>
+    </div>
+    <div id="acc-rows"></div>
+  </div>
+
+  <label class="lbl">Emotional State</label>
+  <div class="emo-grid mb12" id="emo-grid"></div>
+
+  <label class="lbl">Overtraded?</label>
+  <div class="tog-row mb12">
+    <button class="tog" id="tog-ot-y" onclick="setTog('overtrading',true)">✓ Yes</button>
+    <button class="tog" id="tog-ot-n" onclick="setTog('overtrading',false)">✗ No</button>
+  </div>
+
+  <label class="lbl">Closed After Planned Target?</label>
+  <div class="tog-row mb12">
+    <button class="tog" id="tog-ct-y" onclick="setTog('closedOnTarget',true)">✓ Yes</button>
+    <button class="tog" id="tog-ct-n" onclick="setTog('closedOnTarget',false)">✗ No</button>
+  </div>
+
+  <label class="lbl">Notes</label>
+  <textarea class="field mb18" id="entry-notes" rows="3" placeholder="What worked? What didn't?" style="resize:none"></textarea>
+
+  <button class="btn-primary" onclick="saveEntry()" id="save-btn">Save Entry</button>
+</div>
+
+<!-- HISTORY -->
+<div id="screen-history" class="screen">
+  <div class="flex-sb mb12">
+    <div class="section-title">All Entries</div>
+    <select class="field" style="width:auto;padding:6px 10px;font-size:12px" id="month-filter" onchange="renderHistory()">
+      <option value="">All time</option>
+    </select>
+  </div>
+  <div id="hist-summary"></div>
+  <div id="hist-list"></div>
+</div>
+
+<!-- OUTFLOW -->
+<div id="screen-outflow" class="screen">
+  <div class="section-title mb4">Monthly Outflow</div>
+  <div class="grey fs12 mb14">Tick off each payment as you clear it</div>
+  <div id="outflow-content"></div>
+</div>
+
+<!-- DETAIL -->
+<div id="screen-detail" class="screen">
+  <div id="detail-content"></div>
+</div>
+
+<!-- NAV -->
+<div id="nav">
+  <div class="nav-inner">
+    <a class="nav-btn" href="https://mtutrade.in/?tab=dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </a>
+    <a class="nav-btn" href="https://mtutrade.in/?tab=pro">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+      Live Algo
+    </a>
+    <a class="nav-btn on" href="https://mtutrade.in/pnl">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      Journal
+    </a>
+    <button class="nav-btn" id="nav-settings" onclick="openCfg()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- CONFIG MODAL -->
+<div class="modal-bg" id="modal-config">
+  <div class="modal-box" style="max-height:90vh;overflow-y:auto">
+    <div class="modal-title">Configure Targets</div>
+    <p class="grey fs13 mb14">Set your monthly targets. Changes apply immediately and are saved permanently.</p>
+
+    <label class="lbl">Monthly Outflow Target (₹)</label>
+    <input type="number" class="field mb4" id="cfg-outflow" placeholder="225700" style="font-size:16px;font-weight:600"/>
+    <div class="grey fs11 mb14">Default: ₹2,25,700 · Your total fixed monthly commitments</div>
+
+    <label class="lbl">Fixed Monthly Salary (₹)</label>
+    <input type="number" class="field mb4" id="cfg-salary" placeholder="80000" style="font-size:16px;font-weight:600"/>
+    <div class="grey fs11 mb14">Default: ₹80,000 · Deducted upfront — trading covers the rest</div>
+
+    <div style="background:#FEF9EF;border:1px solid #F0DFA8;border-radius:12px;padding:12px 14px;margin-bottom:20px">
+      <div class="fs12 fw7" style="color:#9A7A3A;margin-bottom:6px">📊 Trading Must Cover</div>
+      <div id="cfg-preview" class="fw8" style="font-size:22px;color:#E8834A">₹1,45,700</div>
+      <div class="grey fs11 mt4">= Outflow − Salary</div>
+    </div>
+
+    <button class="btn-primary mb10" onclick="saveCfgAndClose()">Save & Apply</button>
+    <button onclick="resetCfg()" style="width:100%;background:#fff;color:#9A9A9A;border:1.5px solid #E8E6E0;border-radius:12px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px">Reset to Defaults</button>
+    <button class="btn-reset" onclick="closeCfg()">Cancel</button>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-bg" id="modal-settings">
+  <div class="modal-box">
+    <div class="modal-title">Data & Backup</div>
+    <p class="grey fs13 mb14">Data lives in your browser's localStorage on mtutrade.in. Persists across sessions on this device.</p>
+    <div style="background:#F5F9F5;border:1px solid #C8E6D4;border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div class="fw7 green fs12 mb4">✓ Auto-save active</div>
+      <div class="grey fs12" id="settings-count">0 entries stored.</div>
+    </div>
+    <button onclick="openCfg()" style="width:100%;background:#FEF9EF;color:#9A7A3A;border:1.5px solid #F0DFA8;border-radius:12px;padding:14px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:8px">
+      ⚙️ Configure Monthly Targets
+    </button>
+    <div class="grey fs11 mb14" style="text-align:center">Change outflow target, salary, trading goal</div>
+    <button class="btn-primary mb10" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="doExport()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export All Data (JSON)
+    </button>
+    <button class="btn-ghost mb10" onclick="document.getElementById('import-file').click()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Import from Backup
+    </button>
+    <input type="file" id="import-file" accept=".json" style="display:none" onchange="doImport(event)"/>
+    <button class="btn-ghost mb10" onclick="doLock()">🔒 Lock / Sign Out</button>
+    <button class="btn-reset" onclick="closeSettings()">Close</button>
+  </div>
+</div>
+
+<!-- DELETE CONFIRM MODAL -->
+<div class="modal-bg" id="modal-delete">
+  <div class="modal-box">
+    <div class="modal-title">Delete Entry?</div>
+    <p class="grey fs14 mb20">This will be permanently removed.</p>
+    <div style="display:flex;gap:10px">
+      <button class="tog" style="flex:1;padding:12px" onclick="closeDelete()">Cancel</button>
+      <button style="flex:1;border:none;border-radius:10px;padding:12px;font-size:14px;background:#C0392B;color:#fff;font-weight:700;cursor:pointer" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- #app -->
+
+<script>
+// ─── CONSTANTS ──────────────────────────────────────────────────────
+const AUTH_PASS   = 'mahakaal123';
+const LS_PNL      = 'mahakaal_pnl_v1';
+const LS_OUT      = 'mahakaal_outflow_v1';
+const LS_CFG           = 'mahakaal_config_v1';
+const SALARY_DEFAULT   = 80000;
+const TOTAL_OUT_DEFAULT= 225700;
+
+// ─── CONFIG helpers (must be defined before any render function) ──────
+function loadCfg()           { try{return JSON.parse(localStorage.getItem(LS_CFG)||'{}')}catch(_){return {}} }
+function saveCfg(cfg)        { localStorage.setItem(LS_CFG, JSON.stringify(cfg)); }
+function getCfgVal(key, def) { const v=loadCfg()[key]; return (v!==undefined&&v!=='')?parseFloat(v):def; }
+const ACCOUNTS    = ['Dhan','Kotak Neo','Groww','Flattrade'];
+const ACC_COLORS  = ['#4A6CF7','#E8834A','#1A7A4A','#C0392B'];
+const EMOTIONS    = ['😊 Calm','😤 Frustrated','😰 Anxious','🤩 Euphoric','😐 Neutral','😔 Sad'];
+const EXPENSES = [
+  {id:'icici',    label:'ICICI',       amount:10500, cat:'EMI'},
+  {id:'navi',     label:'Navi',        amount:13300, cat:'EMI'},
+  {id:'lt',       label:'L&T Finance', amount:10500, cat:'EMI'},
+  {id:'rent',     label:'Rent',        amount:12000, cat:'Living'},
+  {id:'kgs',      label:'KGS Bank',    amount:34500, cat:'EMI'},
+  {id:'hdfc',     label:'HDFC',        amount:20300, cat:'EMI'},
+  {id:'carloan',  label:'Car Loan',    amount:13400, cat:'EMI'},
+  {id:'cc',       label:'Credit Card', amount:10000, cat:'Credit'},
+  {id:'gold',     label:'Gold Loan',   amount:15000, cat:'EMI'},
+  {id:'util',     label:'Utilities',   amount:2500,  cat:'Living'},
+  {id:'savings',  label:'Savings',     amount:5000,  cat:'Savings'},
+  {id:'fibe',     label:'Fibe',        amount:9000,  cat:'EMI'},
+  {id:'payme',    label:'PayMe',       amount:11000, cat:'Credit'},
+  {id:'payrupik', label:'Payrupik',    amount:34000, cat:'Credit'},
+  {id:'sachin',   label:'Sachin',      amount:20000, cat:'Personal'},
+  {id:'yesbank',  label:'Yes Bank',    amount:4700,  cat:'EMI'},
+];
+// These are now dynamic — read from config at render time
+// TOTAL_OUT and TRADE_TARGET computed in renderOutflow / renderDashboard
+const TOTAL_OUT    = EXPENSES.reduce((s,e)=>s+e.amount,0); // base: 225700
+const CAT_COLORS   = {EMI:'#E8834A',Living:'#4A6CF7',Credit:'#C0392B',Savings:'#1A7A4A',Personal:'#9B59B6'};
+
+// ─── STATE ───────────────────────────────────────────────────────────
+let records = [];
+let outflow = {};   // {YYYY-MM: {expId: bool}}
+let currentTab = 'dashboard';
+let editId = null;
+let deleteId = null;
+let formState = {};  // overtrading, closedOnTarget, emotion
+
+// ─── HELPERS ─────────────────────────────────────────────────────────
+const todayISO  = () => new Date().toISOString().slice(0,10);
+const monthKey  = () => new Date().toISOString().slice(0,7);
+const fmtDate   = iso => new Date(iso).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+const fmtINR    = (v,short=false) => {
+  const n = parseFloat(v);
+  if (isNaN(n)) return '—';
+  if (short && Math.abs(n)>=1000) return (n<0?'-':'')+'₹'+(Math.abs(n)/1000).toFixed(1)+'k';
+  return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(n);
+};
+const pnlColor  = v => isNaN(parseFloat(v)) ? '#6B6B6B' : parseFloat(v)>=0 ? '#1A7A4A' : '#C0392B';
+const el        = id => document.getElementById(id);
+const mk        = (tag,cls,html) => { const e=document.createElement(tag); if(cls)e.className=cls; if(html!==undefined)e.innerHTML=html; return e; };
+
+function calcTotals(entry) {
+  let tG=0,tN=0,tT=0,hG=false,hN=false,hT=false;
+  ACCOUNTS.forEach(acc => {
+    const a = entry.accounts[acc]||{};
+    const g=parseFloat(a.gross), n=parseFloat(a.net), t=parseInt(a.trades);
+    if(!isNaN(g)){tG+=g;hG=true;} if(!isNaN(n)){tN+=n;hN=true;} if(!isNaN(t)){tT+=t;hT=true;}
+  });
+  return {gross:hG?tG:null, net:hN?tN:null, trades:hT?tT:null};
+}
+
+// ─── PERSIST ─────────────────────────────────────────────────────────
+function loadAll() {
+  try { records = JSON.parse(localStorage.getItem(LS_PNL)||'[]'); } catch(_){ records=[]; }
+  try { outflow = JSON.parse(localStorage.getItem(LS_OUT)||'{}'); } catch(_){ outflow={}; }
+}
+function saveAll() {
+  localStorage.setItem(LS_PNL, JSON.stringify(records));
+  localStorage.setItem(LS_OUT, JSON.stringify(outflow));
+}
+
+// ─── TOAST ───────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, isErr=false) {
+  const t = el('toast');
+  t.textContent = msg;
+  t.className = isErr ? 'err' : '';
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ t.style.display='none'; }, 2800);
+}
+
+// ─── AUTH ─────────────────────────────────────────────────────────────
+function doAuth() {
+  const v = el('auth-pass').value;
+  if (v === AUTH_PASS) {
+    localStorage.setItem('mtu_pnl_auth','1');
+    el('auth-screen').style.display = 'none';
+    el('header').style.display = 'block';
+    el('nav').style.display = 'block';
+    renderAll();
+    goTab('dashboard');
+  } else {
+    el('auth-err').style.display = 'block';
+    setTimeout(()=>el('auth-err').style.display='none', 1500);
+  }
+}
+el('auth-pass').addEventListener('keydown', e => { if(e.key==='Enter') doAuth(); });
+
+// ─── NAVIGATION ───────────────────────────────────────────────────────
+function goTab(tab) {
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('on'));
+  el('screen-'+tab).classList.add('active');
+  const nb = el('nav-'+tab);
+  if(nb) nb.classList.add('on');
+  currentTab = tab;
+  window.scrollTo(0,0);
+  if(tab==='dashboard') renderDashboard();
+  if(tab==='history')   renderHistory();
+  if(tab==='outflow')   renderOutflow();
+}
+
+// ─── RENDER ALL ───────────────────────────────────────────────────────
+function renderAll() {
+  updateHeader();
+  renderDashboard();
+  buildMonthFilter();
+}
+
+function updateHeader() {
+  el('hdr-sub').innerHTML = records.length + ' entries · <span style="color:#1A7A4A;font-weight:600">Auto-saved ✓</span>';
+  const allNet = records.reduce((s,r)=>{const{net}=calcTotals(r);return s+(net??0);},0);
+  const h = el('hdr-alltime');
+  h.textContent = fmtINR(allNet,true);
+  h.style.color = pnlColor(allNet);
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────
+function renderDashboard() {
+  const mk2 = monthKey();
+  const monthRecs = records.filter(r=>r.date.startsWith(mk2));
+  let gross=0,net=0,trades=0,days=0;
+  monthRecs.forEach(r=>{
+    const t=calcTotals(r);
+    if(t.gross!==null)gross+=t.gross;
+    if(t.net!==null){net+=t.net;days++;}
+    if(t.trades!==null)trades+=t.trades;
+  });
+
+  el('dash-month-sub').textContent = new Date().toLocaleString('en-IN',{month:'long',year:'numeric'}) + ' · ' + days + ' trading days';
+
+  // stat cards
+  el('dash-stats').innerHTML = [
+    {l:'Gross',v:gross,icon:'📈',cur:true},
+    {l:'Net',  v:net,  icon:'💰',cur:true},
+    {l:'Trades',v:trades,icon:'🔄',cur:false},
+  ].map(s=>`<div class="stat-card">
+    <div class="stat-icon">${s.icon}</div>
+    <div class="stat-label">${s.l}</div>
+    <div class="stat-val" style="color:${s.cur?pnlColor(s.v):'#3A3A3A'}">${s.cur?fmtINR(s.v,true):(s.v||0)}</div>
+  </div>`).join('');
+
+  // outflow mini widget
+  const mk3 = mk2;
+  const CFG_OUT2 = getCfgVal('outflow', TOTAL_OUT_DEFAULT);
+  const CFG_SAL2 = getCfgVal('salary',  SALARY_DEFAULT);
+  const TRADE_TARGET2 = Math.max(0, CFG_OUT2 - CFG_SAL2);
+  const monthPaid = outflow[mk3]||{};
+  const cleared = EXPENSES.filter(e=>e.cat!=='EMI'&&monthPaid[e.id]).reduce((s,e)=>s+e.amount,0);
+  const TICKABLE_TOTAL = EXPENSES.filter(e=>e.cat!=='EMI').reduce((s,e)=>s+e.amount,0);
+  const pct = Math.round((cleared/TICKABLE_TOTAL)*100);
+  const barColor = pct>=100?'#1A7A4A':pct>=60?'#C8A86B':'#E8834A';
+  const tradePct = Math.min(100,Math.max(0,Math.round((net/TRADE_TARGET2)*100)));
+  const tradingBarColor = tradePct>=100?'#1A7A4A':tradePct>=60?'#C8A86B':'#E8834A';
+  el('dash-out-mini').innerHTML = `
+    <div class="out-mini-hdr">
+      <span class="out-mini-label">Monthly Outflow Chase</span>
+      <span class="out-mini-pct">${pct}% cleared →</span>
+    </div>
+    <div class="out-mini-score">
+      <span class="out-mini-cleared">${fmtINR(cleared,true)}</span>
+      <span style="font-size:14px;color:rgba(255,255,255,.3)">/</span>
+      <span style="font-size:15px;font-weight:600;color:rgba(255,255,255,.6)">${fmtINR(TOTAL_OUT,true)}</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" style="width:${pct}%;background:${barColor}"></div></div>
+    <div class="out-mini-footer">
+      <span style="color:rgba(255,255,255,.35)">Remaining: ${fmtINR(CFG_OUT2-cleared,true)}</span>
+      <span style="color:${net>=0?'#4ADE80':'#F87171'}">Trading: ${fmtINR(net,true)}</span>
+    </div>`;
+
+  // account breakdown
+  const accRows = ACCOUNTS.map((acc,i)=>{
+    let accNet=0, hasNet=false;
+    monthRecs.forEach(r=>{
+      const v=parseFloat((r.accounts[acc]||{}).net); if(!isNaN(v)){accNet+=v;hasNet=true;}
+    });
+    return `<div class="acc-breakdown-row">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="width:7px;height:7px;border-radius:50%;background:${ACC_COLORS[i]}"></div>
+        <span class="fs13" style="color:#3A3A3A;font-weight:500">${acc}</span>
+      </div>
+      <span class="fw7 fs14" style="color:${pnlColor(hasNet?accNet:NaN)}">${hasNet?fmtINR(accNet,true):'—'}</span>
+    </div>`;
+  }).join('');
+  el('dash-acc-card').innerHTML = '<div class="fs13 fw7 mb10" style="color:#1A1A1A">Account Breakdown</div>' + accRows;
+
+  // recent
+  const recentHtml = records.length===0
+    ? `<div style="text-align:center;padding:40px 20px;color:#9A9A9A"><div style="font-size:36px">📊</div><div style="margin-top:12px;font-size:15px;font-weight:600;color:#3A3A3A">No entries yet</div><div class="mt4 fs13">Tap + to log your first trading day</div></div>`
+    : `<div class="flex-sb mb8"><span class="fs13 fw7" style="color:#1A1A1A">Recent Entries</span><button onclick="goTab('history')" style="border:none;background:none;font-size:12px;color:#C8A86B;font-weight:600;cursor:pointer">See all →</button></div>`
+      + records.slice(0,3).map(rec=>{
+          const t=calcTotals(rec);
+          return `<div class="hist-row" onclick="openDetail('${rec.id}')">
+            <div class="hist-main">
+              <div class="hist-left">
+                <div class="hist-date">${fmtDate(rec.date)}</div>
+                <div class="hist-mood">${rec.emotion||'No mood logged'}</div>
+              </div>
+              <div class="hist-right">
+                <span class="hist-amt" style="color:${pnlColor(t.net??t.gross)}">${t.net!==null?fmtINR(t.net,true):t.gross!==null?fmtINR(t.gross,true)+'*':'—'}</span>
+                <span class="hist-chevron">›</span>
+              </div>
+            </div>
+          </div>`;
+        }).join('');
+  el('dash-recent').innerHTML = recentHtml;
+}
+
+// ─── ADD / EDIT FORM ─────────────────────────────────────────────────
+function resetForm() {
+  editId = null;
+  formState = {overtrading:null, closedOnTarget:null, emotion:''};
+  el('add-title').textContent = 'New Entry';
+  el('save-btn').textContent = 'Save Entry';
+  el('entry-date').value = todayISO();
+  el('entry-notes').value = '';
+  buildAccRows();
+  buildEmoGrid();
+  updateTogs();
+}
+
+function loadFormFromRecord(rec) {
+  editId = rec.id;
+  formState = {overtrading:rec.overtrading, closedOnTarget:rec.closedOnTarget, emotion:rec.emotion||''};
+  el('add-title').textContent = 'Edit Entry';
+  el('save-btn').textContent = 'Update Entry';
+  el('entry-date').value = rec.date;
+  el('entry-notes').value = rec.notes||'';
+  buildAccRows(rec.accounts);
+  buildEmoGrid();
+  updateTogs();
+}
+
+function buildAccRows(accounts) {
+  el('acc-rows').innerHTML = ACCOUNTS.map((acc,i)=>{
+    const a = (accounts||{})[acc]||{};
+    return `<div class="acc-row">
+      <div class="acc-name"><div class="acc-dot" style="background:${ACC_COLORS[i]}"></div>${acc}</div>
+      <input type="number" class="field field-sm" placeholder="0" id="gross-${i}" value="${a.gross||''}"/>
+      <input type="number" class="field field-sm" placeholder="0" id="net-${i}" value="${a.net||''}"/>
+      <input type="number" class="field field-xs" placeholder="#" min="0" id="trades-${i}" value="${a.trades||''}"/>
+    </div>`;
+  }).join('');
+}
+
+function buildEmoGrid() {
+  el('emo-grid').innerHTML = EMOTIONS.map(em=>`
+    <button class="emo-btn${formState.emotion===em?' sel':''}" onclick="setEmo('${em}')">${em}</button>
+  `).join('');
+}
+
+function setEmo(em) {
+  formState.emotion = formState.emotion===em ? '' : em;
+  buildEmoGrid();
+}
+
+function setTog(field, val) {
+  formState[field] = formState[field]===val ? null : val;
+  updateTogs();
+}
+
+function updateTogs() {
+  const ot = formState.overtrading;
+  el('tog-ot-y').className = 'tog' + (ot===true?' yes':'');
+  el('tog-ot-n').className = 'tog' + (ot===false?' no':'');
+  const ct = formState.closedOnTarget;
+  el('tog-ct-y').className = 'tog' + (ct===true?' yes':'');
+  el('tog-ct-n').className = 'tog' + (ct===false?' no':'');
+}
+
+function saveEntry() {
+  const date = el('entry-date').value;
+  if(!date) { showToast('Pick a date', true); return; }
+  const accounts = {};
+  ACCOUNTS.forEach((acc,i)=>{
+    accounts[acc] = {
+      gross:  el('gross-'+i).value,
+      net:    el('net-'+i).value,
+      trades: el('trades-'+i).value,
+    };
+  });
+  const entry = {
+    id: editId || Date.now().toString(),
+    date,
+    accounts,
+    emotion: formState.emotion,
+    overtrading: formState.overtrading,
+    closedOnTarget: formState.closedOnTarget,
+    notes: el('entry-notes').value,
+  };
+  if(editId) {
+    records = records.map(r=>r.id===editId?entry:r);
+  } else {
+    records.unshift(entry);
+  }
+  records.sort((a,b)=>b.date.localeCompare(a.date));
+  saveAll();
+  updateHeader();
+  buildMonthFilter();
+  showToast(editId?'Entry updated ✓':'Entry saved ✓');
+  resetForm();
+  goTab('history');
+}
+
+// ─── HISTORY ─────────────────────────────────────────────────────────
+function buildMonthFilter() {
+  const months = [...new Set(records.map(r=>r.date.slice(0,7)))].sort().reverse();
+  const sel = el('month-filter');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All time</option>' +
+    months.map(m=>{
+      const d = new Date(m+'-01');
+      return `<option value="${m}"${m===cur?' selected':''}>${d.toLocaleString('en-IN',{month:'short',year:'numeric'})}</option>`;
+    }).join('');
+}
+
+function renderHistory() {
+  const filter = el('month-filter').value;
+  const list = filter ? records.filter(r=>r.date.startsWith(filter)) : records;
+
+  if(filter) {
+    let g=0,n=0,t=0,hg=false,hn=false;
+    list.forEach(r=>{
+      const tot=calcTotals(r);
+      if(tot.gross!==null){g+=tot.gross;hg=true;}
+      if(tot.net!==null){n+=tot.net;hn=true;}
+      if(tot.trades!==null)t+=tot.trades;
+    });
+    el('hist-summary').innerHTML = `<div style="background:#fff;border-radius:12px;padding:12px 14px;display:flex;gap:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">
+      <div><div class="grey" style="font-size:10px;font-weight:600;text-transform:uppercase">Gross</div><div class="fw7" style="color:${pnlColor(hg?g:NaN)}">${hg?fmtINR(g,true):'—'}</div></div>
+      <div><div class="grey" style="font-size:10px;font-weight:600;text-transform:uppercase">Net</div><div class="fw7" style="color:${pnlColor(hn?n:NaN)}">${hn?fmtINR(n,true):'—'}</div></div>
+      <div><div class="grey" style="font-size:10px;font-weight:600;text-transform:uppercase">Trades</div><div class="fw7" style="color:#3A3A3A">${t}</div></div>
+      <div><div class="grey" style="font-size:10px;font-weight:600;text-transform:uppercase">Days</div><div class="fw7" style="color:#3A3A3A">${list.length}</div></div>
+    </div>`;
+  } else {
+    el('hist-summary').innerHTML='';
+  }
+
+  if(list.length===0) {
+    el('hist-list').innerHTML = `<div style="text-align:center;padding:40px 20px;color:#9A9A9A"><div style="font-size:30px">🗂</div><div class="mt10 fs14">No entries ${filter?'for this month':'yet'}</div></div>`;
+    return;
+  }
+
+  el('hist-list').innerHTML = list.map(rec=>{
+    const t=calcTotals(rec);
+    const tags = (rec.overtrading?'<span class="tag tag-red">OT</span>':'') + (rec.closedOnTarget?'<span class="tag tag-green">✓ Target</span>':'');
+    return `<div class="hist-row" onclick="openDetail('${rec.id}')">
+      <div class="hist-main">
+        <div class="hist-left">
+          <div class="hist-date">${fmtDate(rec.date)} ${tags}</div>
+          <div class="hist-mood">${rec.emotion||'—'}</div>
+          <div class="hist-meta">
+            ${t.gross!==null?`<span>G: <b>${fmtINR(t.gross,true)}</b></span>`:''}
+            ${t.net!==null?`<span>N: <b style="color:${pnlColor(t.net)}">${fmtINR(t.net,true)}</b></span>`:''}
+            ${t.trades!==null?`<span>${t.trades} trades</span>`:''}
+          </div>
+        </div>
+        <div class="hist-right">
+          <span class="hist-amt" style="color:${pnlColor(t.net??t.gross)}">${t.net!==null?fmtINR(t.net,true):t.gross!==null?fmtINR(t.gross,true):'—'}</span>
+          <span class="hist-chevron">›</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── DETAIL ──────────────────────────────────────────────────────────
+function openDetail(id) {
+  const rec = records.find(r=>r.id===id);
+  if(!rec) return;
+  const t = calcTotals(rec);
+  const accRows = ACCOUNTS.map((acc,i)=>{
+    const a=rec.accounts[acc]||{};
+    if(a.gross===''&&a.net===''&&a.trades==='') return '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #F5F3EE">
+      <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${ACC_COLORS[i]}"></div><span class="fs13 fw7">${acc}</span></div>
+      <div style="text-align:right">
+        ${a.gross?`<div class="fs12 grey">G: ${fmtINR(a.gross,true)}</div>`:''}
+        ${a.net?`<div class="fs13 fw7" style="color:${pnlColor(a.net)}">N: ${fmtINR(a.net,true)}</div>`:''}
+        ${a.trades?`<div class="fs11 grey">${a.trades} trades</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+
+  el('detail-content').innerHTML = `
+    <div class="flex-sb mb14">
+      <button class="back-btn" onclick="goTab('history')">← Back</button>
+      <span class="fs14 fw7">${fmtDate(rec.date)}</span>
+      <button style="border:none;background:#FEF9EF;border-radius:8px;padding:6px 10px;font-size:13px;color:#9A7A3A;font-weight:600;cursor:pointer" onclick="editEntry('${rec.id}')">Edit</button>
+    </div>
+    <div class="grid3 mb12">
+      <div class="stat-card"><div class="stat-label">Gross</div><div class="stat-val" style="color:${pnlColor(t.gross)}">${t.gross!==null?fmtINR(t.gross,true):'—'}</div></div>
+      <div class="stat-card"><div class="stat-label">Net</div><div class="stat-val" style="color:${pnlColor(t.net)}">${t.net!==null?fmtINR(t.net,true):'—'}</div></div>
+      <div class="stat-card"><div class="stat-label">Trades</div><div class="stat-val" style="color:#3A3A3A">${t.trades!==null?t.trades:'—'}</div></div>
+    </div>
+    <div class="card mb12">
+      <div class="fs12 fw7 mb10" style="color:#1A1A1A">Account Breakdown</div>
+      ${accRows||'<div class="grey fs13">No data entered</div>'}
+    </div>
+    <div class="card mb12">
+      <div class="det-row"><span class="grey fs13">Emotional State</span><span class="fs13 fw7">${rec.emotion||'—'}</span></div>
+      <div class="det-row"><span class="grey fs13">Overtraded</span>${rec.overtrading===null||rec.overtrading===undefined?'<span class="grey">—</span>':rec.overtrading?'<span class="tag tag-red">Yes</span>':'<span class="tag tag-green">No</span>'}</div>
+      <div class="det-row"><span class="grey fs13">Closed on Target</span>${rec.closedOnTarget===null||rec.closedOnTarget===undefined?'<span class="grey">—</span>':rec.closedOnTarget?'<span class="tag tag-green">Yes</span>':'<span class="tag tag-red">No</span>'}</div>
+      ${rec.notes?`<div class="fs13 mt10" style="color:#5A5A5A;line-height:1.6">${rec.notes}</div>`:''}
+    </div>
+    <button class="btn-danger" onclick="askDelete('${rec.id}')">Delete Entry</button>
+  `;
+  goTab('detail');
+  el('nav-history').classList.add('on');
+}
+
+function editEntry(id) {
+  const rec = records.find(r=>r.id===id);
+  if(!rec) return;
+  loadFormFromRecord(rec);
+  goTab('add');
+}
+
+// ─── DELETE ──────────────────────────────────────────────────────────
+function askDelete(id) { deleteId=id; el('modal-delete').classList.add('open'); }
+function closeDelete()  { deleteId=null; el('modal-delete').classList.remove('open'); }
+function confirmDelete() {
+  records = records.filter(r=>r.id!==deleteId);
+  saveAll(); updateHeader(); buildMonthFilter();
+  closeDelete(); showToast('Entry deleted');
+  goTab('history');
+}
+
+// ─── OUTFLOW ─────────────────────────────────────────────────────────
+function renderOutflow() {
+  const mk2 = monthKey();
+  const CFG_OUT      = getCfgVal('outflow', TOTAL_OUT_DEFAULT);
+  const CFG_SAL      = getCfgVal('salary',  SALARY_DEFAULT);
+  const TRADE_TARGET = Math.max(0, CFG_OUT - CFG_SAL);
+  const monthPaid = outflow[mk2]||{};
+  const cleared = EXPENSES.filter(e=>e.cat!=='EMI'&&monthPaid[e.id]).reduce((s,e)=>s+e.amount,0);
+  const tickableTotal = EXPENSES.filter(e=>e.cat!=='EMI').reduce((s,e)=>s+e.amount,0);
+  const pct = Math.round((cleared/tickableTotal)*100);
+  const barColor = pct>=100?'#1A7A4A':pct>=60?'#C8A86B':'#E8834A';
+  const monthRecs = records.filter(r=>r.date.startsWith(mk2));
+  const tradingNet = monthRecs.reduce((s,r)=>{const{net}=calcTotals(r);return s+(net??0);},0);
+  const netPos = CFG_SAL + tradingNet - CFG_OUT;
+  const tradePct = Math.min(100,Math.max(0,Math.round((tradingNet/TRADE_TARGET)*100)));
+  const tradingBarColor = tradePct>=100?'#1A7A4A':tradePct>=60?'#C8A86B':'#E8834A';
+  const tradeToGo = Math.max(0, TRADE_TARGET - tradingNet);
+  const monthLabel = new Date(mk2+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'});
+  // only non-EMI items are tick-offable
+  const TICKABLE = EXPENSES.filter(e=>e.cat!=='EMI');
+  const EMI_TOTAL = EXPENSES.filter(e=>e.cat==='EMI').reduce((s,e)=>s+e.amount,0);
+  const clearedCount = TICKABLE.filter(e=>monthPaid[e.id]).length;
+  const clearedAmt2  = TICKABLE.filter(e=>monthPaid[e.id]).reduce((s,e)=>s+e.amount,0);
+
+  // category list — EMI excluded, shown as fixed line instead
+  const cats = [...new Set(TICKABLE.map(e=>e.cat))];
+  const catHtml = cats.map(cat=>{
+    const items = TICKABLE.filter(e=>e.cat===cat);
+    const catTotal = items.reduce((s,e)=>s+e.amount,0);
+    const catCleared = items.filter(e=>monthPaid[e.id]).reduce((s,e)=>s+e.amount,0);
+    const expRows = items.map(exp=>{
+      const paid = !!monthPaid[exp.id];
+      return `<div class="exp-row${paid?' paid':''}" id="exprow-${exp.id}">
+        <div class="exp-left">
+          <div class="exp-check${paid?' ticked':''}" id="expcheck-${exp.id}" onclick="toggleExp('${exp.id}')">
+            ${paid?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>':''}
+          </div>
+          <span class="exp-name${paid?' paid':''}" id="expname-${exp.id}">${exp.label}</span>
+        </div>
+        <span class="exp-amt${paid?' paid':''}" id="expamt-${exp.id}">${fmtINR(exp.amount)}</span>
+      </div>`;
+    }).join('');
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="exp-cat-hdr">
+        <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${CAT_COLORS[cat]||'#9A9A9A'}"></div><span class="fs13 fw7">${cat}</span></div>
+        <span class="fs12 grey"><span style="color:${catCleared>0?'#1A7A4A':'#9A9A9A'};font-weight:600">${fmtINR(catCleared,true)}</span> / ${fmtINR(catTotal,true)}</span>
+      </div>
+      ${expRows}
+    </div>`;
+  }).join('');
+
+  el('outflow-content').innerHTML = `
+    <!-- cricket board -->
+    <div class="cricket-board">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        <div>
+          <div style="font-size:11px;color:rgba(255,255,255,.5);font-weight:600;letter-spacing:.8px;text-transform:uppercase">Monthly Outflow Chase</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:2px">${monthLabel}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:10px;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.5px">After Salary</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.6);font-weight:600">₹${(TOTAL_OUT/1000).toFixed(1)}k − ₹80k</div>
+        </div>
+      </div>
+      <div class="cricket-score">
+        <span class="score-cleared">${fmtINR(tradingNet,true)}</span>
+        <span class="score-sep">/</span>
+        <span class="score-total">${fmtINR(TRADE_TARGET,true)}</span>
+        <span class="score-pct" style="color:${tradingBarColor}">${tradePct}%</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="width:${tradePct}%;background:linear-gradient(90deg,${tradingBarColor},${tradingBarColor}CC)"></div></div>
+      <div class="cricket-stats">
+        <div class="c-stat"><div class="c-stat-label">Still Need</div><div class="c-stat-val" style="color:#E8834A">${fmtINR(Math.max(0,TRADE_TARGET-tradingNet),true)}</div></div>
+        <div class="c-stat"><div class="c-stat-label">Trading MTD</div><div class="c-stat-val" style="color:${tradingNet>=0?'#4ADE80':'#F87171'}">${fmtINR(tradingNet,true)}</div></div>
+        <div class="c-stat"><div class="c-stat-label">Net Position</div><div class="c-stat-val" style="color:${netPos>=0?'#4ADE80':'#F87171'}">${fmtINR(netPos,true)}</div></div>
+      </div>
+    </div>
+
+
+
+    <!-- EMI fixed reference (auto-debit, no tick needed) -->
+    <div class="card" style="margin-bottom:10px;border-left:3px solid #E8834A">
+      <div class="flex-sb">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:#E8834A"></div>
+          <div>
+            <div class="fs13 fw7" style="color:#1A1A1A">EMIs</div>
+            <div class="fs11 grey mt4">Auto-debit · ₹1,31,200 fixed monthly target</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div class="fs16 fw8" style="color:#E8834A">${fmtINR(EMI_TOTAL)}</div>
+          <div class="fs10 grey mt4">9 payments</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- tick-off categories (Living, Credit, Savings, Personal) -->
+    ${catHtml}
+
+    <!-- summary card -->
+    <div class="card mb12">
+      <div class="det-row"><span class="fs13 grey">Total Outflow</span><span class="fs14 fw7">${fmtINR(CFG_OUT)}</span></div>
+      <div class="det-row"><span class="fs13 grey">− Salary (fixed)</span><span class="fs14 fw7 green">− ${fmtINR(CFG_SAL)}</span></div>
+      <div class="det-row"><span class="fs13 fw7" style="color:#1A1A1A">Trading Must Cover</span><span class="fs14 fw8" style="color:#E8834A">${fmtINR(TRADE_TARGET)}</span></div>
+      <div class="det-row"><span class="fs13 grey">Trading Net (MTD)</span><span class="fs14 fw7" style="color:${pnlColor(tradingNet)}">${tradingNet>=0?'+ ':''}${fmtINR(tradingNet)}</span></div>
+      <div class="flex-sb mt10"><span class="fs14 fw7" style="color:#1A1A1A">Net Position</span><span style="font-size:16px;font-weight:800;color:${pnlColor(netPos)}">${netPos>=0?'+ ':''}${fmtINR(netPos)}</span></div>
+    </div>
+
+    <button class="btn-reset mb12" onclick="resetMonthOutflow()">Reset This Month's Checkmarks</button>
+  `;
+}
+
+function toggleExp(id) {
+  const mk2 = monthKey();
+  if(!outflow[mk2]) outflow[mk2]={};
+  outflow[mk2][id] = !outflow[mk2][id];
+  saveAll();
+  renderOutflow(); // full re-render keeps score live
+}
+
+function resetMonthOutflow() {
+  outflow[monthKey()] = {};
+  saveAll();
+  renderOutflow();
+  showToast('Reset for this month');
+}
+
+// ─── SETTINGS ────────────────────────────────────────────────────────
+function openSettings() {
+  el('settings-count').textContent = records.length + ' P&L entries stored. Outflow data saved monthly.';
+  el('modal-settings').classList.add('open');
+}
+function closeSettings() { el('modal-settings').classList.remove('open'); }
+
+function doExport() {
+  const blob = new Blob([JSON.stringify({version:2,exported:new Date().toISOString(),records,outflow},null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href=url; a.download='mahakaal_backup_'+todayISO()+'.json'; a.click(); URL.revokeObjectURL(url);
+  closeSettings(); showToast('Backup downloaded ✓');
+}
+
+function doImport(e) {
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      const incoming = parsed.records||(Array.isArray(parsed)?parsed:null);
+      if(!incoming){showToast('Invalid file',true);return;}
+      const merged=[...records];
+      incoming.forEach(r=>{ if(!merged.find(x=>x.id===r.id)) merged.push(r); });
+      merged.sort((a,b)=>b.date.localeCompare(a.date));
+      records = merged;
+      if(parsed.outflow) outflow = {...outflow,...parsed.outflow};
+      saveAll(); updateHeader(); buildMonthFilter();
+      showToast('Imported '+incoming.length+' entries ✓');
+      closeSettings();
+    } catch(_){ showToast('Could not read file',true); }
+  };
+  reader.readAsText(file); e.target.value='';
+}
+
+function doLock() {
+  localStorage.removeItem('mtu_pnl_auth');
+  el('modal-settings').classList.remove('open');
+  el('header').style.display='none';
+  el('nav').style.display='none';
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  el('auth-screen').style.display='flex';
+  el('auth-pass').value='';
+}
+
+// close modals on bg click
+el('modal-settings').addEventListener('click', e=>{ if(e.target===el('modal-settings')) closeSettings(); });
+el('modal-config').addEventListener('click', e=>{ if(e.target===el('modal-config')) closeCfg(); });
+el('modal-delete').addEventListener('click', e=>{ if(e.target===el('modal-delete')) closeDelete(); });
+
+// ─── CONFIG MODAL ────────────────────────────────────────────────────
+function openCfg() {
+  const cfg = loadCfg();
+  const curOut = getCfgVal('outflow', TOTAL_OUT_DEFAULT);
+  const curSal = getCfgVal('salary', SALARY_DEFAULT);
+  el('cfg-outflow').value = curOut;
+  el('cfg-salary').value  = curSal;
+  updateCfgPreview();
+  el('modal-config').classList.add('open');
+  el('modal-settings').classList.remove('open');
+  el('cfg-outflow').addEventListener('input', updateCfgPreview);
+  el('cfg-salary').addEventListener('input', updateCfgPreview);
+}
+function updateCfgPreview() {
+  const out = parseFloat(el('cfg-outflow').value) || TOTAL_OUT_DEFAULT;
+  const sal = parseFloat(el('cfg-salary').value)  || SALARY_DEFAULT;
+  const target = Math.max(0, out - sal);
+  el('cfg-preview').textContent = new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(target);
+}
+function saveCfgAndClose() {
+  const out = parseFloat(el('cfg-outflow').value);
+  const sal = parseFloat(el('cfg-salary').value);
+  if(isNaN(out)||out<=0){ showToast('Enter a valid outflow amount',true); return; }
+  if(isNaN(sal)||sal<0){  showToast('Enter a valid salary amount',true);  return; }
+  saveCfg({outflow:out, salary:sal});
+  el('modal-config').classList.remove('open');
+  renderAll();
+  showToast('Targets updated ✓');
+}
+function resetCfg() {
+  el('cfg-outflow').value = TOTAL_OUT_DEFAULT;
+  el('cfg-salary').value  = SALARY_DEFAULT;
+  updateCfgPreview();
+}
+function closeCfg() {
+  el('modal-config').classList.remove('open');
+}
+
+// ─── BOOT ────────────────────────────────────────────────────────────
+loadAll();
+if(localStorage.getItem('mtu_pnl_auth')==='1') {
+  el('auth-screen').style.display='none';
+  el('header').style.display='block';
+  el('nav').style.display='block';
+  buildAccRows();
+  buildEmoGrid();
+  renderAll();
+  goTab('dashboard');
+}
+</script>
+</body>
+</html>

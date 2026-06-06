@@ -1,0 +1,17 @@
+{
+  "max_trades_per_day": 4,
+  "daily_loss_limit": -2500,
+  "daily_target": 5000,
+  "max_sl_hits": 2,
+  "cooling_minutes_after_sl": 15,
+  "position_size_lots": 2,
+  "sl_points": 20,
+  "target_points": 40,
+  "enable_pre_trade_breathe": true,
+  "time_restrictions": {
+    "no_trade_before": "00:00",
+    "no_trade_after": "23:59",
+    "lunch_break_start": "00:00",
+    "lunch_break_end": "00:01"
+  }
+}
