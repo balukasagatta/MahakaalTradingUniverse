@@ -8,6 +8,19 @@ import websockets
 from typing import Set, Dict, Any
 from token_manager import get_upstox_token
 
+def _get_best_upstox_token():
+    """Get first available user token, fallback to env.vars"""
+    import json, os
+    tokens_path = os.path.expanduser("~/mahakaal/user_tokens.json")
+    if os.path.exists(tokens_path):
+        try:
+            tokens = json.load(open(tokens_path))
+            for email, brokers in tokens.items():
+                if "upstox" in brokers:
+                    return brokers["upstox"]["access_token"]
+        except: pass
+    return get_upstox_token()
+
 # ── Instrument keys ────────────────────────────────────────────────────────────
 INSTRUMENTS = {
     # Indices
@@ -53,7 +66,7 @@ class FeedManager:
         self.clients -= dead
 
     async def _get_ws_url(self) -> str:
-        token = get_upstox_token()
+        token = _get_best_upstox_token()
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 UPSTOX_WS_AUTH_URL,
@@ -71,25 +84,30 @@ class FeedManager:
         We use the upstox-python-sdk if available, else fallback to raw parse.
         """
         try:
-            from upstox_client.feeder.proto import MarketDataFeed_pb2
+            from upstox_client.feeder.proto import MarketDataFeedV3_pb2 as MarketDataFeed_pb2
             feed = MarketDataFeed_pb2.FeedResponse()
             feed.ParseFromString(raw)
             result = {}
             for key, val in feed.feeds.items():
-                ff = val.ff
-                result[key] = {
-                    "ltp":   ff.marketFF.ltpc.ltp   if ff.HasField("marketFF") else 0,
-                    "close": ff.marketFF.ltpc.cp    if ff.HasField("marketFF") else 0,
-                    "open":  ff.marketFF.ltpc.open  if ff.HasField("marketFF") else 0,
-                    "high":  ff.marketFF.eFeedDetails.high52Week if ff.HasField("marketFF") else 0,
-                    "low":   ff.marketFF.eFeedDetails.low52Week  if ff.HasField("marketFF") else 0,
-                    "vol":   ff.marketFF.eFeedDetails.vtt        if ff.HasField("marketFF") else 0,
-                    "oi":    ff.marketFF.eFeedDetails.oi         if ff.HasField("marketFF") else 0,
-                    "delta": ff.optionGreeks.delta if ff.HasField("optionGreeks") else None,
-                    "iv":    ff.optionGreeks.iv    if ff.HasField("optionGreeks") else None,
-                    "theta": ff.optionGreeks.theta if ff.HasField("optionGreeks") else None,
-                    "vega":  ff.optionGreeks.vega  if ff.HasField("optionGreeks") else None,
-                }
+                try:
+                    ltp, close, oi, delta, iv = 0, 0, 0, None, None
+                    # Try LTPC first (all instruments)
+                    if val.HasField("ltpc"):
+                        ltp   = val.ltpc.ltp
+                        close = val.ltpc.cp
+                    # Try fullFeed
+                    elif val.HasField("fullFeed"):
+                        ff = val.fullFeed
+                        if ff.HasField("indexFF"):
+                            ltp   = ff.indexFF.ltpc.ltp
+                            close = ff.indexFF.ltpc.cp
+                        elif ff.HasField("marketFF"):
+                            ltp   = ff.marketFF.ltpc.ltp
+                            close = ff.marketFF.ltpc.cp
+                            oi    = ff.marketFF.eFeedDetails.oi if ff.marketFF.HasField("eFeedDetails") else 0
+                    result[key] = {"ltp": ltp, "close": close, "oi": oi, "delta": delta, "iv": iv}
+                except Exception as e:
+                    pass
             return result if result else None
         except ImportError:
             # Fallback: try upstox_client v3 decode

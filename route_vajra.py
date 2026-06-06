@@ -65,20 +65,32 @@ def parse_ltp(data: dict, key: str) -> dict:
 
 @router.get("/market")
 async def get_market(request: Request):
-    email = None
-    try:
-        from route_auth import verify_token
-        token = request.cookies.get("mtu_token")
-        if not token:
-            auth = request.headers.get("authorization","")
-            if auth.startswith("Bearer "): token = auth[7:]
-        if token: email = verify_token(token)["sub"]
-    except: pass
-    data   = await fetch_ltp_multi(["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50", "NSE_INDEX|India VIX"], email)
-    sensex = parse_ltp(data, "BSE_INDEX|SENSEX")
-    nifty  = parse_ltp(data, "NSE_INDEX|Nifty 50")
-    vix_d  = parse_ltp(data, "NSE_INDEX|India VIX")
-    return {"sensex": sensex, "nifty": nifty, "vix": vix_d, "time": datetime.now(IST).strftime("%H:%M:%S")}
+    from feed_manager import feed_manager
+    feed = feed_manager.latest.get("data", {})
+    def make(key):
+        d = feed.get(key, {})
+        ltp   = d.get("ltp", 0)
+        close = d.get("close", 0)
+        chg   = round(ltp - close, 2) if ltp and close else 0
+        pct   = round((chg / close) * 100, 2) if close else 0
+        return {"ltp": ltp, "close": close, "change": chg, "pct": pct}
+    # Fallback to REST if feed is empty
+    if not feed:
+        email = None
+        try:
+            from route_auth import verify_token
+            token = request.cookies.get("mtu_token")
+            if not token:
+                auth = request.headers.get("authorization","")
+                if auth.startswith("Bearer "): token = auth[7:]
+            if token: email = verify_token(token)["sub"]
+        except: pass
+        data   = await fetch_ltp_multi(["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50", "NSE_INDEX|India VIX"], email)
+        sensex = parse_ltp(data, "BSE_INDEX|SENSEX")
+        nifty  = parse_ltp(data, "NSE_INDEX|Nifty 50")
+        vix_d  = parse_ltp(data, "NSE_INDEX|India VIX")
+        return {"sensex": sensex, "nifty": nifty, "vix": vix_d, "time": datetime.now(IST).strftime("%H:%M:%S")}
+    return {"sensex": make("SENSEX"), "nifty": make("NIFTY"), "vix": make("VIX"), "time": datetime.now(IST).strftime("%H:%M:%S")}
 
 @router.get("/state")
 async def get_vajra_state():

@@ -181,7 +181,7 @@ async def get_atm_chain(index: str = "NIFTY", expiry: str = Query(...), window: 
     return {**full, "strikes": filtered}
 
 @router.get("/ltp")
-async def get_option_ltp(ce_key: str, pe_key: str):
+async def get_option_ltp(ce_key: str, pe_key: str, request: Request = None):
     """Fetch LTP for just 2 instrument keys — ultra fast"""
     keys = f"{ce_key},{pe_key}"
     email = _get_email(request)
