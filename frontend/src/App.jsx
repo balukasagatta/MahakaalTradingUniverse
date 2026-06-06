@@ -139,6 +139,7 @@ export default function App({ user, onLogout }) {
     // Polling (WS not yet available)
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
     const pollState  = async () => {
+      if (blockPoll.current) return
       const r = await apiFetch("/vajra/state")
       if (r?.state) setPragnya(r)
       if (r?.trades) setPos(r.trades.filter(t=>t.status==="OPEN"))
@@ -235,6 +236,8 @@ export default function App({ user, onLogout }) {
     const instrKey = `${symbol}${strike}${optType}`
     if (!strike || !ltp) return
 
+
+
     // INSTANT: add temp position to UI immediately
     const tempId = `T${Date.now()}_${Math.random().toString(36).slice(2,6)}`
     setPos(prev => [...prev, {
@@ -287,8 +290,11 @@ export default function App({ user, onLogout }) {
     // Toast immediately
     if (reason === "SL") toast$("SL Hit", false)
     else toast$(`Closed · ${mtm>=0?"+":""}₹${Math.round(mtm||0)}`, mtm>=0)
+    // Only close real DB IDs (not temp IDs starting with T)
+    const realIds = ids.filter(id => !String(id).startsWith('T'))
+    if (!realIds.length) return
     // BACKGROUND: parallel API calls
-    Promise.all(ids.map(id => apiFetch("/vajra/trade/close", {
+    Promise.all(realIds.map(id => apiFetch("/vajra/trade/close", {
       method: "POST",
       body: JSON.stringify({ trade_id:id, exit_price: reason==="SL"?(sl||0):(ltp||0), exit_reason:reason })
     }))).then(() => apiFetch("/vajra/state")).then(pr => {
@@ -308,16 +314,15 @@ export default function App({ user, onLogout }) {
       if (ltp) pnl += (p.direction==="SELL" ? p.entry-ltp : ltp-p.entry) * lots * instr.lot
     })
     setPos([])
+    blockPoll.current = true
+    setTimeout(() => blockPoll.current = false, 8000)
     toast$(`Closed All · ${pnl>=0?"+":""}₹${Math.round(pnl)}`, pnl>=0)
     // BACKGROUND: parallel close all
-    Promise.all(snap.map(p => {
-      const ltp = p.instrument.includes("CE") ? ceLtpValRef.current : peLtpValRef.current
-      return apiFetch("/vajra/trade/close", {
-        method: "POST",
-        body: JSON.stringify({ trade_id:p.id, exit_price:ltp||p.entry||0, exit_reason:"EXIT" })
-      })
-    })).then(() => apiFetch("/vajra/state")).then(pr => {
-      if (pr?.trades) setPos(pr.trades.filter(t=>t.status==="OPEN"))
+    // Use bulk close endpoint — closes ALL open positions in DB at once
+    apiFetch("/vajra/trade/close-all", {
+      method: "POST",
+      body: JSON.stringify({ exit_price: 0 })
+    }).then(() => apiFetch("/vajra/state")).then(pr => {
       if (pr) setPragnya(pr)
     })
   }, [instr.lot])

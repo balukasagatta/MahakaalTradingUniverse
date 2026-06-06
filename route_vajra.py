@@ -168,3 +168,17 @@ async def get_config():
 async def save_config(cfg: dict):
     json.dump(cfg, open(CFG_PATH, "w"), indent=2)
     return {"status": "ok"}
+
+@router.post("/trade/close-all")
+async def close_all_trades(request: Request):
+    import sqlite3
+    from datetime import datetime
+    conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
+    now = datetime.now(IST).strftime("%H:%M:%S")
+    n = conn.execute(
+        "UPDATE trades SET status='CLOSED',exit_price=0,exit_reason='MARKET_EXIT' WHERE status='OPEN' AND product=?",
+        (PRODUCT,)
+    ).rowcount
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "closed": n}
