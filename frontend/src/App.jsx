@@ -238,6 +238,28 @@ export default function App({ user, onLogout }) {
 
 
 
+    // Counter trade — close ONE opposing position (FIFO)
+    const opposing = posRef.current.filter(p => p.instrument===instrKey && p.direction!==action)
+    if (opposing.length > 0) {
+      const oppLtp = instrKey.includes("CE") ? ceLtpValRef.current : peLtpValRef.current
+      // Pick first real DB ID — skip temps still in flight
+      const toClose = opposing.find(p => !String(p.id).startsWith("T")) || opposing[0]
+      const lots = JSON.parse(toClose.extra_json||"{}").lots||1
+      const oneLotPnl = (toClose.direction==="SELL" ? toClose.entry-(oppLtp||0) : (oppLtp||0)-toClose.entry) * lots * instr.lot
+      // Remove only this one from UI
+      setPos(prev => prev.filter(p => p.id !== toClose.id))
+      blockPoll.current = true; setTimeout(()=>blockPoll.current=false, 4000)
+      toast$(`Squared off · ${oneLotPnl>=0?"+":""}₹${Math.round(oneLotPnl)}`, oneLotPnl>=0)
+      // Only close if real DB id
+      if (!String(toClose.id).startsWith("T")) {
+        apiFetch("/vajra/trade/close", {
+          method: "POST",
+          body: JSON.stringify({ trade_id: toClose.id, exit_price: oppLtp||0, exit_reason: "SQUARE_OFF" })
+        }).then(() => apiFetch("/vajra/state")).then(pr => { if (pr) setPragnya(pr) })
+      }
+      return
+    }
+
     // INSTANT: add temp position to UI immediately
     const tempId = `T${Date.now()}_${Math.random().toString(36).slice(2,6)}`
     setPos(prev => [...prev, {

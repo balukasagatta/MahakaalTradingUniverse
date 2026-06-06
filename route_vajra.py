@@ -182,3 +182,34 @@ async def close_all_trades(request: Request):
     conn.commit()
     conn.close()
     return {"status": "ok", "closed": n}
+
+@router.post("/trade/close-instrument")
+async def close_instrument_trades(request: Request):
+    import sqlite3
+    data = await request.json()
+    instrument = data.get("instrument")
+    direction  = data.get("direction")
+    exit_price = data.get("exit_price", 0)
+    close_all  = data.get("close_all", False)
+    if not instrument or not direction:
+        return {"status":"error","msg":"instrument and direction required"}
+    conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
+    if close_all:
+        n = conn.execute(
+            "UPDATE trades SET status='CLOSED',exit_price=?,exit_reason='SQUARE_OFF' WHERE status='OPEN' AND product=? AND instrument=? AND direction=?",
+            (exit_price, PRODUCT, instrument, direction)
+        ).rowcount
+    else:
+        # Close only ONE trade (oldest first)
+        row = conn.execute(
+            "SELECT id FROM trades WHERE status='OPEN' AND product=? AND instrument=? AND direction=? ORDER BY id ASC LIMIT 1",
+            (PRODUCT, instrument, direction)
+        ).fetchone()
+        if row:
+            conn.execute("UPDATE trades SET status='CLOSED',exit_price=?,exit_reason='SQUARE_OFF' WHERE id=?", (exit_price, row[0]))
+            n = 1
+        else:
+            n = 0
+    conn.commit()
+    conn.close()
+    return {"status":"ok","closed":n}
