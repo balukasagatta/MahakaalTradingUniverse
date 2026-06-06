@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
+import BrokerConnect from "./BrokerConnect.jsx"
 
 const API = "https://mtutrade.in/api"
 const INSTRUMENTS = {
   SENSEX: { lot: 20, step: 100, expiry_day: "THU" },
   NIFTY:  { lot: 65, step: 50,  expiry_day: "TUE" },
 }
-const BROKERS = ["Upstox","Dhan","Kotak Neo","Zerodha","Angel","Fyers"]
 
 async function api(path, opts={}) {
   try {
@@ -17,21 +17,17 @@ async function api(path, opts={}) {
   } catch(e) { return null }
 }
 
-// ── Themes ─────────────────────────────────────────────────────────────────────
 const LIGHT = {
   canvas:"#FAF9F7", surface:"#FFFFFF", raised:"#F3F1EE",
   line:"#E8E4DE", subtle:"#7A7670", body:"#3D3A35", ink:"#1A1814",
   brand:"#C8590A", sell:"#C62828", buy:"#2E7D32",
   up:"#2E7D32", down:"#C62828", warn:"#E65100",
-  drawerBg:"#FFFFFF", overlay:"rgba(0,0,0,0.3)",
 }
-
 const DARK = {
   canvas:"#0A0A0A", surface:"#141414", raised:"#1E1E1E",
   line:"#2A2A2A", subtle:"#888888", body:"#BBBBBB", ink:"#F0EDE8",
   brand:"#FF8C00", sell:"#FF1744", buy:"#00C853",
   up:"#00C853", down:"#FF1744", warn:"#FF8C00",
-  drawerBg:"#141414", overlay:"rgba(0,0,0,0.7)",
 }
 
 const inter = "'Inter',system-ui,sans-serif"
@@ -40,9 +36,6 @@ const mono  = "'JetBrains Mono','Fira Mono',monospace"
 export default function App({ user, onLogout }) {
   const [dark,      setDark]      = useState(()=>localStorage.getItem("mtu_dark")==="1")
   const [drawer,    setDrawer]    = useState(false)
-  const [broker,    setBroker]    = useState(()=>localStorage.getItem("mtu_broker")||"")
-  const [brokerTok, setBrokerTok] = useState("")
-  const [tokSaved,  setTokSaved]  = useState(false)
   const [symbol,    setSymbol]    = useState("SENSEX")
   const [expiries,  setExpiries]  = useState([])
   const [expiry,    setExpiry]    = useState("")
@@ -64,6 +57,7 @@ export default function App({ user, onLogout }) {
   const [gitaMsg,   setGitaMsg]   = useState(null)
   const [loading,   setLoading]   = useState(false)
   const [isMobile,  setIsMobile]  = useState(window.innerWidth < 768)
+  const [drawerTab, setDrawerTab] = useState("broker") // broker | appearance | pragnya | gita
 
   const T = dark ? DARK : LIGHT
   const instr = INSTRUMENTS[symbol] || INSTRUMENTS.SENSEX
@@ -77,16 +71,25 @@ export default function App({ user, onLogout }) {
     if(meta) meta.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
     const onResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener("resize", onResize)
+    // Handle broker OAuth callback
+    const params = new URLSearchParams(window.location.search)
+    if(params.get("broker_success")) {
+      showToast(`✓ ${params.get("broker_success")} connected!`)
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+    if(params.get("broker_error")) {
+      showToast(`Failed to connect ${params.get("broker_error")}`, false)
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
     return () => window.removeEventListener("resize", onResize)
   },[])
 
-  // Apply dark mode to body
   useEffect(()=>{
     document.body.style.background = T.canvas
     localStorage.setItem("mtu_dark", dark?"1":"0")
   },[dark, T.canvas])
 
-  function showToast(msg, ok=true) { setToast({msg,ok}); setTimeout(()=>setToast(null),3000) }
+  function showToast(msg, ok=true) { setToast({msg,ok}); setTimeout(()=>setToast(null),3500) }
 
   useEffect(()=>{
     const poll=async()=>{ const r=await api("/vajra/market"); if(r) setMarket(r) }
@@ -178,17 +181,8 @@ export default function App({ user, onLogout }) {
 
   async function handleLogout(){
     await fetch(`${API}/auth/logout`,{method:"POST",credentials:"include"})
-    localStorage.removeItem("mtu_token")
-    localStorage.removeItem("mtu_user")
+    localStorage.removeItem("mtu_token"); localStorage.removeItem("mtu_user")
     if(onLogout) onLogout()
-  }
-
-  function saveBrokerToken(){
-    if(!brokerTok.trim()){ showToast("Paste your broker API token",false); return }
-    localStorage.setItem(`mtu_broker_token_${broker}`, brokerTok.trim())
-    setTokSaved(true)
-    setTimeout(()=>setTokSaved(false),2000)
-    showToast("Token saved")
   }
 
   const st=pragnya?.state||{}; const cfg=pragnya?.cfg||{}; const quote=pragnya?.quote||{}
@@ -199,10 +193,10 @@ export default function App({ user, onLogout }) {
   const indexPct=symbol==="SENSEX"?sensex?.pct||0:0
   const now=new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false})
 
-  const selStyle = {fontFamily:mono,fontSize:12,fontWeight:600,color:T.ink,border:`1px solid ${T.line}`,borderRadius:6,padding:"5px 6px",background:T.surface,cursor:"pointer",height:32,outline:"none"}
-  const lbl = t => <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:3}}>{t}</div>
+  const selStyle={fontFamily:mono,fontSize:12,fontWeight:600,color:T.ink,border:`1px solid ${T.line}`,borderRadius:6,padding:"5px 6px",background:T.surface,cursor:"pointer",height:32,outline:"none"}
+  const lbl=t=><div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:3}}>{t}</div>
 
-  const ExecBtn = ({text,sub,onClick,color}) => (
+  const ExecBtn=({text,sub,onClick,color})=>(
     <button onPointerDown={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:"100%",minHeight:isMobile?56:52,gap:1,borderRadius:8,border:"none",background:color,color:"#fff",fontFamily:inter,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",boxShadow:dark?`0 2px 8px ${color}66`:`0 2px 4px ${color}44`}}>
       <span style={{fontWeight:700,fontSize:isMobile?15:14}}>{text}</span>
       {sub&&<span style={{fontWeight:500,fontSize:10,opacity:0.85}}>{sub}</span>}
@@ -223,106 +217,121 @@ export default function App({ user, onLogout }) {
     </div>
   )
 
+  // ── DRAWER CONTENT ────────────────────────────────────────────────────────
+  const DrawerContent = () => (
+    <div style={{width:300,background:T.surface,height:"100%",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)",overflowY:"auto"}}>
+      {/* Drawer header */}
+      <div style={{padding:"14px 16px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <div style={{fontFamily:mono,fontSize:13,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
+        <button onPointerDown={()=>setDrawer(false)} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent"}}>✕</button>
+      </div>
+
+      {/* Account tile */}
+      <div style={{padding:"14px 16px",borderBottom:`1px solid ${T.line}`}}>
+        <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:8}}>Account</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontFamily:inter,fontSize:13,fontWeight:700,color:T.ink}}>{user?.name||"User"}</div>
+            <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:2}}>{user?.email||""}</div>
+            <div style={{display:"flex",gap:4,marginTop:6,flexWrap:"wrap"}}>
+              {(user?.products||["VAJRA"]).map(p=>(
+                <span key={p} style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.brand,background:dark?"#2A1A0A":"#FFF3E0",border:`1px solid ${T.brand}`,borderRadius:4,padding:"2px 6px"}}>{p}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Drawer tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${T.line}`,flexShrink:0}}>
+        {[["broker","🔗 Broker"],["appearance","🌙 Theme"],["pragnya","🧠 Pragnya"],["gita","🕉️ Gita"]].map(([k,l])=>(
+          <button key={k} onPointerDown={()=>setDrawerTab(k)} style={{flex:1,padding:"8px 4px",border:"none",borderBottom:drawerTab===k?`2px solid ${T.brand}`:"2px solid transparent",background:"none",color:drawerTab===k?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:10,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>{l}</button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div style={{flex:1,padding:"16px",overflowY:"auto"}}>
+
+        {/* Broker tab */}
+        {drawerTab==="broker"&&(
+          <BrokerConnect T={T} user={user} onConnected={(broker)=>{ showToast(`✓ ${broker} connected!`); setDrawer(false) }}/>
+        )}
+
+        {/* Appearance tab */}
+        {drawerTab==="appearance"&&(
+          <div>
+            <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Theme</div>
+            <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontFamily:inter,fontSize:13,fontWeight:700,color:T.ink}}>{dark?"Bloomberg Dark":"Warm Light"}</div>
+                <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:2}}>{dark?"Black terminal, electric colors":"Off-white, warm professional"}</div>
+              </div>
+              <div onPointerDown={()=>setDark(d=>!d)} style={{width:48,height:26,borderRadius:100,background:dark?T.brand:T.line,cursor:"pointer",position:"relative",transition:"background .25s",flexShrink:0,WebkitTapHighlightColor:"transparent"}}>
+                <div style={{position:"absolute",top:3,left:dark?24:3,width:20,height:20,borderRadius:100,background:"#fff",transition:"left .25s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pragnya tab */}
+        {drawerTab==="pragnya"&&(
+          <div>
+            <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Discipline Rules</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {[["Max Trades/Day",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Daily Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
+                <div key={l} style={{background:T.raised,padding:"10px 12px",borderRadius:8,border:`1px solid ${T.line}`}}>
+                  <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>{l}</div>
+                  <div style={{fontFamily:mono,fontSize:18,fontWeight:700,color:T.ink}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:12,background:T.raised,borderRadius:8,padding:"10px 12px",border:`1px solid ${T.line}`}}>
+              <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:6}}>Today</div>
+              <div style={{display:"flex",justifyContent:"space-between",fontFamily:mono,fontSize:12,color:T.ink}}>
+                <span>Trades: {st.trades_taken||0}/{cfg.max_trades_per_day||4}</span>
+                <span>SL hits: {st.sl_hits||0}/{cfg.max_sl_hits||2}</span>
+              </div>
+              <div style={{background:T.line,borderRadius:100,height:4,marginTop:8}}>
+                <div style={{width:`${dscore}%`,height:"100%",background:dscore>=80?T.up:dscore>=50?T.warn:T.down,borderRadius:100}}/>
+              </div>
+              <div style={{fontFamily:mono,fontSize:10,color:dscore>=80?T.up:dscore>=50?T.warn:T.down,marginTop:4,fontWeight:700,textAlign:"right"}}>Score: {dscore}/100</div>
+            </div>
+          </div>
+        )}
+
+        {/* Gita tab */}
+        {drawerTab==="gita"&&(
+          <div>
+            <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Today's Verse</div>
+            <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
+              <div style={{fontSize:13,color:T.body,fontStyle:"italic",lineHeight:1.9,marginBottom:8}}>"{quote.text||"Perform your duty equipoised, abandoning all attachment."}"</div>
+              <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>— {quote.src||"Bhagavad Gita 2.48"}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sign out */}
+      <div style={{padding:"14px 16px",borderTop:`1px solid ${T.line}`,flexShrink:0}}>
+        <button onPointerDown={handleLogout} style={{width:"100%",minHeight:42,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:14,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  )
+
   // ── MAIN ──────────────────────────────────────────────────────────────────
   return (
     <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter,transition:"background .3s"}}>
 
-      {/* Toast */}
-      {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"11px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center"}}>{toast.msg}</div>}
+      {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"11px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center",fontFamily:inter}}>{toast.msg}</div>}
       {loading&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9998,height:2,background:T.brand}}/>}
 
-      {/* ── SIDE DRAWER OVERLAY ── */}
+      {/* Side drawer */}
       {drawer&&(
-        <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex"}}>
-          {/* Backdrop */}
-          <div style={{flex:1,background:T.overlay}} onPointerDown={()=>setDrawer(false)}/>
-          {/* Drawer */}
-          <div style={{width:300,background:T.drawerBg,height:"100%",overflowY:"auto",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)",transition:"transform .25s"}}>
-
-            {/* Drawer header */}
-            <div style={{padding:"16px 20px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
-              <button onPointerDown={()=>setDrawer(false)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent"}}>✕</button>
-            </div>
-
-            <div style={{flex:1,padding:"16px 20px",display:"flex",flexDirection:"column",gap:16}}>
-
-              {/* Account tile */}
-              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
-                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Account</div>
-                <div style={{fontSize:14,fontWeight:700,color:T.ink,marginBottom:2}}>{user?.name||"User"}</div>
-                <div style={{fontFamily:mono,fontSize:11,color:T.subtle,marginBottom:2}}>{user?.email||""}</div>
-                <div style={{display:"flex",gap:4,marginTop:6,flexWrap:"wrap"}}>
-                  {(user?.products||["VAJRA"]).map(p=>(
-                    <span key={p} style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.brand,background:dark?"#2A1A0A":"#FFF3E0",border:`1px solid ${T.brand}`,borderRadius:4,padding:"2px 6px"}}>{p}</span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Broker token tile */}
-              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
-                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Broker Token</div>
-                <div style={{marginBottom:8}}>
-                  <select value={broker} onChange={e=>{setBroker(e.target.value);localStorage.setItem("mtu_broker",e.target.value)}} style={{...selStyle,width:"100%",marginBottom:8}}>
-                    {BROKERS.map(b=><option key={b}>{b}</option>)}
-                  </select>
-                  <textarea
-                    value={brokerTok}
-                    onChange={e=>setBrokerTok(e.target.value)}
-                    placeholder="Paste your broker API access token here"
-                    rows={3}
-                    style={{width:"100%",border:`1px solid ${T.line}`,borderRadius:6,padding:"8px",fontFamily:mono,fontSize:11,color:T.ink,background:T.surface,outline:"none",resize:"none",boxSizing:"border-box"}}
-                  />
-                </div>
-                <button onPointerDown={saveBrokerToken} style={{width:"100%",minHeight:36,borderRadius:6,border:"none",background:tokSaved?T.buy:T.brand,color:"#fff",fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
-                  {tokSaved?"✓ Saved":"Save Token"}
-                </button>
-                <div style={{fontFamily:mono,fontSize:9,color:T.subtle,marginTop:8,lineHeight:1.5}}>Token is stored locally on this device only. Never sent to MTU servers.</div>
-              </div>
-
-              {/* Appearance tile */}
-              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
-                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>Appearance</div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:T.ink}}>{dark?"Bloomberg Dark":"Warm Light"}</div>
-                    <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:2}}>{dark?"Black terminal, electric colors":"Off-white, warm professional"}</div>
-                  </div>
-                  {/* Toggle */}
-                  <div onPointerDown={()=>setDark(d=>!d)} style={{width:48,height:26,borderRadius:100,background:dark?"#FF8C00":T.line,cursor:"pointer",position:"relative",transition:"background .25s",flexShrink:0,WebkitTapHighlightColor:"transparent"}}>
-                    <div style={{position:"absolute",top:3,left:dark?24:3,width:20,height:20,borderRadius:100,background:"#fff",transition:"left .25s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
-                  </div>
-                </div>
-              </div>
-
-              {/* PRAGNYA tile */}
-              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
-                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:10}}>PRAGNYA Rules</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[["Max Trades",cfg.max_trades_per_day],["Loss Limit",`₹${cfg.daily_loss_limit}`],["Target",`₹${cfg.daily_target}`],["Max SL Hits",cfg.max_sl_hits]].map(([l,v])=>(
-                    <div key={l}>
-                      <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1px",marginBottom:2}}>{l}</div>
-                      <div style={{fontFamily:mono,fontSize:16,fontWeight:700,color:T.ink}}>{v}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Gita tile */}
-              <div style={{background:T.raised,borderRadius:10,padding:"14px",border:`1px solid ${T.line}`}}>
-                <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:8}}>Today's Verse</div>
-                <div style={{fontSize:12,color:T.body,fontStyle:"italic",lineHeight:1.8}}>"{quote.text}"</div>
-                <div style={{fontFamily:mono,fontSize:9,color:T.subtle,marginTop:6}}>— {quote.src}</div>
-              </div>
-            </div>
-
-            {/* Sign out — bottom */}
-            <div style={{padding:"16px 20px",borderTop:`1px solid ${T.line}`}}>
-              <button onPointerDown={handleLogout} style={{width:"100%",minHeight:44,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:14,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
-                Sign Out
-              </button>
-            </div>
-          </div>
+        <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
+          <div style={{flex:1,background:dark?"rgba(0,0,0,0.7)":"rgba(0,0,0,0.3)"}} onPointerDown={()=>setDrawer(false)}/>
+          <DrawerContent/>
         </div>
       )}
 
@@ -330,11 +339,7 @@ export default function App({ user, onLogout }) {
       <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 12px",height:44,display:"flex",alignItems:"center",gap:8,position:"sticky",top:0,zIndex:100,transition:"background .3s"}}>
         <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink,flexShrink:0}}>⚡ <span style={{color:T.brand}}>VAJRA</span></div>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        <button onPointerDown={()=>setBroker(b=>b)} style={{fontFamily:inter,fontSize:11,fontWeight:600,color:T.body,background:T.raised,border:`1px solid ${T.line}`,borderRadius:5,padding:"3px 8px",cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",flexShrink:0}}>
-          {broker||"Broker"} ▾
-        </button>
-        <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        {/* Prices */}
+        {/* Scrollable prices */}
         <div style={{display:"flex",gap:12,alignItems:"center",overflowX:"auto",flex:1,scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
           {[
             {n:"SENSEX",ltp:sensex?.ltp,chg:sensex?.change||0,pct:sensex?.pct||0},
@@ -351,8 +356,7 @@ export default function App({ user, onLogout }) {
           ))}
         </div>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        {/* Stats */}
-        <div style={{display:"flex",gap:10,flexShrink:0}}>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px"}}>P&L</div>
             <div style={{fontFamily:mono,fontSize:12,fontWeight:700,color:dayPnl>=0?T.up:T.down}}>{dayPnl>=0?"+":""}₹{Math.abs(dayPnl).toLocaleString()}</div>
@@ -361,20 +365,19 @@ export default function App({ user, onLogout }) {
             <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px"}}>PRAGNYA</div>
             <div style={{fontFamily:mono,fontSize:12,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down}}>{dscore}/100</div>
           </div>
+          <div style={{width:1,height:18,background:T.line}}/>
+          <button onPointerDown={()=>setDrawer(true)} style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.line}`,background:T.raised,color:T.subtle,fontSize:16,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",display:"flex",alignItems:"center",justifyContent:"center"}}>⚙️</button>
         </div>
-        <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
-        {/* Settings gear */}
-        <button onPointerDown={()=>setDrawer(true)} style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.line}`,background:T.raised,color:T.subtle,fontSize:16,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>⚙️</button>
       </div>
 
-      {/* ── CONTROLS — 2x4 grid mobile, row desktop ── */}
+      {/* ── CONTROLS ── */}
       <div style={{background:T.raised,borderBottom:`1px solid ${T.line}`,padding:"8px 12px",transition:"background .3s"}}>
         {isMobile ? (
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 10px"}}>
-            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
-            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
-            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
-            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,width:"100%"}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
+            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,width:"100%"}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
+            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,width:"100%"}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,width:"100%"}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
             <div>
               {lbl("Qty (Lots)")}
               <div style={{display:"flex",alignItems:"center",background:T.surface,border:`1px solid ${T.line}`,borderRadius:6,height:32}}>
@@ -384,16 +387,16 @@ export default function App({ user, onLogout }) {
               </div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-              <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
-              <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:"100%",background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
+              <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:"100%"}}/></div>
+              <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:"100%"}}/></div>
             </div>
           </div>
         ):(
           <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
-            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,minWidth:80,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
-            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
-            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
-            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,minWidth:105,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("Symbol")}<select value={symbol} onChange={e=>setSymbol(e.target.value)} style={{...selStyle,minWidth:80}}>{Object.keys(INSTRUMENTS).map(k=><option key={k}>{k}</option>)}</select></div>
+            <div>{lbl("Expiry")}<select value={expiry} onChange={e=>setExpiry(e.target.value)} style={{...selStyle,minWidth:105}}>{expiries.map(e=><option key={e}>{e}</option>)}</select></div>
+            <div>{lbl("CE Strike")}<select value={ceStrike} onChange={e=>onCeChange(e.target.value)} style={{...selStyle,minWidth:105}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
+            <div>{lbl("PE Strike")}<select value={peStrike} onChange={e=>onPeChange(e.target.value)} style={{...selStyle,minWidth:105}}>{strikes.map(s=><option key={s.strike} value={String(s.strike)}>{s.strike}{s.is_atm?" ◀":""}</option>)}</select></div>
             <div>
               {lbl("Qty")}
               <div style={{display:"flex",alignItems:"center",background:T.surface,border:`1px solid ${T.line}`,borderRadius:6,height:32}}>
@@ -402,8 +405,8 @@ export default function App({ user, onLogout }) {
                 <button onPointerDown={()=>setQty(q=>q+1)} style={{width:28,height:32,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:16,color:T.ink,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>+</button>
               </div>
             </div>
-            <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:56,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
-            <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:56,background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}/></div>
+            <div>{lbl("SL Pts")}<input type="number" value={slPts} onChange={e=>setSlPts(+e.target.value)} style={{...selStyle,width:56}}/></div>
+            <div>{lbl("Tgt Pts")}<input type="number" value={tgtPts} onChange={e=>setTgtPts(+e.target.value)} style={{...selStyle,width:56}}/></div>
           </div>
         )}
       </div>
@@ -411,7 +414,6 @@ export default function App({ user, onLogout }) {
       {/* ── TRADING PANEL ── */}
       {isMobile ? (
         <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,transition:"background .3s"}}>
-          {/* Spot row */}
           <div style={{padding:"10px 12px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
               <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:2}}>{symbol} Spot</div>
@@ -419,15 +421,14 @@ export default function App({ user, onLogout }) {
               <div style={{fontFamily:mono,fontSize:11,fontWeight:600,color:indexChg>=0?T.up:T.down,marginTop:2}}>{indexChg>=0?"+":""}{indexChg.toFixed(2)} ({indexPct>=0?"+":""}{indexPct.toFixed(2)}%)</div>
             </div>
             <div style={{padding:"8px 12px",border:`1px solid ${T.line}`,borderRadius:8,background:T.raised,textAlign:"right"}}>
-              <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Pragnya</div>
-              <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down,marginBottom:4}}>{dscore}/100</div>
+              <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:3}}>Pragnya</div>
+              <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:dscore>=80?T.up:dscore>=50?T.warn:T.down,marginBottom:3}}>{dscore}/100</div>
               <div style={{background:T.line,borderRadius:100,height:3,width:80}}>
                 <div style={{width:`${dscore}%`,height:"100%",background:dscore>=80?T.up:dscore>=50?T.warn:T.down,borderRadius:100}}/>
               </div>
-              <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginTop:4}}>{st.trades_taken||0}/{cfg.max_trades_per_day||4} trades · SL {st.sl_hits||0}/{cfg.max_sl_hits||2}</div>
+              <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginTop:3}}>{st.trades_taken||0}/{cfg.max_trades_per_day||4} trades</div>
             </div>
           </div>
-          {/* CE + PE */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:`1px solid ${T.line}`}}>
             <div style={{padding:"10px",borderRight:`1px solid ${T.line}`}}>
               <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px",textTransform:"uppercase",marginBottom:2}}>{symbol} {ceStrike} CE</div>
@@ -448,7 +449,6 @@ export default function App({ user, onLogout }) {
               </div>
             </div>
           </div>
-          {/* Close all */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,padding:"8px 10px"}}>
             <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All</button>
             <button onPointerDown={()=>showToast("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel Orders</button>
