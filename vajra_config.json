@@ -1,8 +1,8 @@
 {
-  "max_trades_per_day": 4,
-  "daily_loss_limit": -2500,
-  "daily_target": 5000,
-  "max_sl_hits": 2,
+  "max_trades_per_day": 9999,
+  "daily_loss_limit": -100000,
+  "daily_target": 100000,
+  "max_sl_hits": 9999,
   "cooling_minutes_after_sl": 15,
   "position_size_lots": 2,
   "sl_points": 20,
