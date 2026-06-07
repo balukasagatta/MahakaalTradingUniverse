@@ -244,7 +244,8 @@ async def my_brokers(request: Request):
     return {
         "brokers": {
             broker: {
-                "connected":    True,
+                "connected":    data.get("status") != "expired",
+                "expired":      data.get("status") == "expired",
                 "connected_at": data.get("connected_at",""),
                 "user_id":      creds.get(broker,{}).get("user_id",""),
             }

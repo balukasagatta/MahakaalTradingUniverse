@@ -9,7 +9,7 @@ const BROKERS = {
 
 const API = "https://mtutrade.in/api"
 
-export default function BrokerConnect({ T, user, onConnected }) {
+export default function BrokerConnect({ T, user, onConnected, onDisconnected }) {
   const [connected, setConnected] = useState({})
   const [selected,  setSelected]  = useState("")
   const [fields,    setFields]    = useState({})
@@ -35,6 +35,7 @@ export default function BrokerConnect({ T, user, onConnected }) {
     const token = localStorage.getItem("mtu_token")
     await fetch(`${API}/auth/broker/my-brokers/${broker}`,{method:"DELETE",headers:{"Authorization":`Bearer ${token}`},credentials:"include"})
     setConnected(p=>{ const n={...p}; delete n[broker]; return n })
+    if(onDisconnected) onDisconnected()
   }
 
   async function connect(){

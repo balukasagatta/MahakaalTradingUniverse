@@ -43,7 +43,8 @@ function Root() {
   )
 
   if(!user) return <Login onSuccess={(data)=>setUser(data)}/>
-  return <App user={user} onLogout={handleLogout}/>
+  // Pass key={user.email} so App never remounts on re-render
+  return <App key={user.email} user={user} onLogout={handleLogout}/>
 }
 
-createRoot(document.getElementById('root')).render(<StrictMode><Root/></StrictMode>)
+createRoot(document.getElementById('root')).render(<Root/>)

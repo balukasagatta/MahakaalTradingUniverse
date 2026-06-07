@@ -87,7 +87,7 @@ export default function App({ user, onLogout }) {
   const [gitaMsg,    setGitaMsg]    = useState(null)
   const [loading,    setLoading]    = useState(false)
   const [isMobile,   setIsMobile]   = useState(window.innerWidth < 768)
-  const [brokerOk,   setBrokerOk]   = useState(false)
+  const [brokerStatus, setBrokerStatus] = useState('disconnected')
   const [drawerTab,  setDrawerTab]  = useState("broker")
   const [editingCfg, setEditingCfg] = useState(false)
   const [localCfg,   setLocalCfg]   = useState({})
@@ -129,20 +129,21 @@ export default function App({ user, onLogout }) {
     if (meta) meta.content = "width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     const onResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener("resize", onResize)
-    const tk = localStorage.getItem("mtu_token")
-    if (tk) fetch(`${API}/auth/broker/my-brokers`, { headers:{"Authorization":"Bearer "+tk}, credentials:"include" })
-      .then(r=>r.json()).then(d=>{ if(d.brokers && Object.keys(d.brokers).length>0) setBrokerOk(true) }).catch(()=>{})
+
+    // ── SINGLE SOURCE OF TRUTH for broker status ──
     const p = new URLSearchParams(window.location.search)
-    if (p.get("broker_success")) { toast$(`✓ ${p.get("broker_success")} connected!`); window.history.replaceState({},document.title,window.location.pathname) }
-    if (p.get("broker_error"))   { toast$(`Failed: ${p.get("broker_error")}`,false);   window.history.replaceState({},document.title,window.location.pathname) }
+    if (window.location.search) window.history.replaceState({}, document.title, window.location.pathname)
+    if (p.get("broker_error")) toast$(`Failed: ${p.get("broker_error")}`, false)
 
     // Polling (WS not yet available)
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
     const pollState  = async () => {
-      if (blockPoll.current) return
       const r = await apiFetch("/vajra/state")
-      if (r?.state) setPragnya(r)
-      if (r?.trades) setPos(r.trades.filter(t=>t.status==="OPEN"))
+      if (!r) return
+      if (r.broker_status) setBrokerStatus(r.broker_status)  // always update broker status
+      if (blockPoll.current) return  // block position/pragnya updates only
+      if (r.state) setPragnya(r)
+      if (r.trades) setPos(r.trades.filter(t=>t.status==="OPEN"))
     }
     pollMarket(); const t1=setInterval(pollMarket,5000)
     pollState();  const t2=setInterval(pollState,10000)
@@ -159,6 +160,8 @@ export default function App({ user, onLogout }) {
     document.body.style.background = T.canvas
     localStorage.setItem("mtu_dark", dark ? "1" : "0")
   }, [dark, T.canvas])
+
+
 
   // ── Option chain ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -417,7 +420,17 @@ export default function App({ user, onLogout }) {
     <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter}}>
       <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 16px",height:52,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
         <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
-        <button onPointerDown={()=>setAppScreen("terminal")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent",padding:"8px"}}>✕</button>
+        <button onPointerDown={async()=>{
+          setAppScreen("terminal")
+          const t=localStorage.getItem("mtu_token")
+          if(t){
+            const r=await apiFetch("/vajra/state")
+            if(r?.broker_status) {
+              setBrokerStatus(r.broker_status)
+              if(r.broker_status==='connected') toast$('✓ Broker connected · Live')
+            }
+          }
+        }} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent",padding:"8px"}}>✕</button>
       </div>
       <div style={{maxWidth:480,margin:"0 auto",padding:"16px"}}>
         {/* Account */}
@@ -434,7 +447,7 @@ export default function App({ user, onLogout }) {
         {/* Broker */}
         <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
           <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:12}}>Broker Connection</div>
-          <BrokerConnect T={T} user={user} onConnected={b=>toast$(`✓ ${b} connected!`)}/>
+          <BrokerConnect T={T} user={user} onConnected={b=>{setBrokerStatus('connected');toast$(`✓ ${b} connected · Live`)}} onDisconnected={()=>setBrokerStatus('disconnected')}/>
         </div>
         {/* Appearance */}
         <div style={{background:T.surface,borderRadius:12,padding:"16px",border:`1px solid ${T.line}`,marginBottom:12}}>
@@ -511,15 +524,15 @@ export default function App({ user, onLogout }) {
 
   // ── Terminal ──────────────────────────────────────────────────────────────
   return (
-    <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter,transition:"background .3s"}}>
+    <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter,transition:"background .3s",paddingTop:brokerStatus!=="connected"?"44px":"0"}}>
 
       {/* Toast — fixed, never shifts layout */}
       {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"10px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center",fontFamily:inter,pointerEvents:"none"}}>{toast.msg}</div>}
       {loading&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9998,height:2,background:T.brand}}/>}
 
       {/* Broker banner */}
-      {!brokerOk&&<div onPointerDown={()=>setAppScreen("settings")} style={{background:"#7B5800",color:"#fff",padding:"9px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>
-        <span style={{fontFamily:inter,fontSize:12,fontWeight:600}}>⚠️ No broker connected</span>
+      {brokerStatus!=='connected'&&<div onPointerDown={()=>setAppScreen("settings")} style={{background:"#7B5800",color:"#fff",padding:"9px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",WebkitTapHighlightColor:"transparent",position:"fixed",top:0,left:0,right:0,zIndex:9990}}>
+        <span style={{fontFamily:inter,fontSize:12,fontWeight:600}}>{brokerStatus==='expired'?"⚠️ Session expired — reconnect broker":"⚠️ No broker connected"}</span>
         <span style={{fontFamily:inter,fontSize:12,fontWeight:700}}>Connect →</span>
       </div>}
 

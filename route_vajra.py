@@ -98,15 +98,31 @@ async def get_vajra_state():
     state = get_state(PRODUCT)
     can_trade, warnings, lock = check_rules(PRODUCT, cfg)
     qt, qs = get_daily_quote()
+    # Broker status from user_tokens.json (first user for now — multi-user: pass email via JWT)
+    import json as _json, os as _os
+    _tokens_path = _os.path.expanduser("~/mahakaal/user_tokens.json")
+    try:
+        _all_tokens = _json.load(open(_tokens_path))
+        _broker_status = "disconnected"
+        for _email, _brokers in _all_tokens.items():
+            for _broker, _data in _brokers.items():
+                if _data.get("status") == "expired":
+                    _broker_status = "expired"
+                elif _data.get("access_token"):
+                    _broker_status = "connected"
+    except:
+        _broker_status = "disconnected"
+
     return {
-        "state":      state,
-        "cfg":        cfg,
-        "can_trade":  can_trade,
-        "warnings":   warnings,
-        "lock":       lock,
-        "quote":      {"text": qt, "src": qs},
-        "rewards_pts": get_total_rewards(),
-        "trades":     get_today_trades(PRODUCT),
+        "state":         state,
+        "cfg":           cfg,
+        "can_trade":     can_trade,
+        "warnings":      warnings,
+        "lock":          lock,
+        "quote":         {"text": qt, "src": qs},
+        "rewards_pts":   get_total_rewards(),
+        "trades":        get_today_trades(PRODUCT),
+        "broker_status": _broker_status,
     }
 
 class TradeRequest(BaseModel):
