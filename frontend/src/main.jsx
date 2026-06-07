@@ -1,14 +1,17 @@
-import { StrictMode, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import './index.css'
 import { createRoot } from 'react-dom/client'
 import App from './App.jsx'
 import Login from './Login.jsx'
+import PreMarketPlanner from './PreMarketPlanner.jsx'
 
 const API = "https://mtutrade.in/api"
 
 function Root() {
-  const [user,     setUser]     = useState(null)
-  const [checking, setChecking] = useState(true)
+  const [user,        setUser]        = useState(null)
+  const [checking,    setChecking]    = useState(true)
+  const today = new Date().toISOString().slice(0,10)
+  const [showPlanner, setShowPlanner] = useState(false)
 
   useEffect(()=>{
     const token = localStorage.getItem("mtu_token")
@@ -24,15 +27,22 @@ function Root() {
         localStorage.removeItem("mtu_token")
         localStorage.removeItem("mtu_user")
       }
-    }).catch(()=>{
-      // Don't set user from localStorage on auth failure — forces clean login
-    }).finally(()=>setChecking(false))
+    }).catch(()=>{}).finally(()=>setChecking(false))
   },[])
+
+  useEffect(()=>{
+    if(user){
+      const planned = localStorage.getItem("mtu_planned_"+today)
+      console.log("Planner check:", today, planned, user.email)
+      if(planned !== "1") setShowPlanner(true)
+    }
+  },[user, today])
 
   function handleLogout(){
     localStorage.removeItem("mtu_token")
     localStorage.removeItem("mtu_user")
     setUser(null)
+    setShowPlanner(false)
   }
 
   if(checking) return (
@@ -42,7 +52,16 @@ function Root() {
   )
 
   if(!user) return <Login onSuccess={(data)=>setUser(data)}/>
-  // Pass key={user.email} so App never remounts on re-render
+
+  if(showPlanner) return (
+    <PreMarketPlanner
+      user={user}
+      dark={localStorage.getItem("mtu_dark")==="1"}
+      onComplete={()=>{ localStorage.setItem("mtu_planned_"+today,"1"); setShowPlanner(false) }}
+      onSkip={()=>{ localStorage.setItem("mtu_planned_"+today,"1"); setShowPlanner(false) }}
+    />
+  )
+
   return <App user={user} onLogout={handleLogout}/>
 }
 

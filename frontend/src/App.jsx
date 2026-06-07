@@ -468,13 +468,14 @@ export default function App({ user, onLogout }) {
       <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 16px",height:52,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
         <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink}}>⚙️ Settings</div>
         <button onPointerDown={async()=>{
+          const prevStatus = brokerStatus
           setAppScreen("terminal")
-          const t=localStorage.getItem("mtu_token")
-          if(t){
-            const r=await apiFetch("/vajra/state")
-            if(r?.broker_status) {
-              setBrokerStatus(r.broker_status)
-              if(r.broker_status==='connected') toast$('✓ Broker connected · Live')
+          const r=await apiFetch("/vajra/state")
+          if(r?.broker_status) {
+            setBrokerStatus(r.broker_status)
+            // Only toast if reconnected (was disconnected/expired, now connected)
+            if(r.broker_status==='connected' && prevStatus!=='connected') {
+              toast$('✓ Broker connected · Live')
             }
           }
         }} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:T.subtle,WebkitTapHighlightColor:"transparent",padding:"8px"}}>✕</button>
@@ -550,6 +551,13 @@ export default function App({ user, onLogout }) {
           <div style={{fontSize:13,color:T.body,fontStyle:"italic",lineHeight:1.8}}>"{quote.text||"Perform your duty equipoised."}"</div>
           <div style={{fontFamily:mono,fontSize:10,color:T.subtle,marginTop:6}}>— {quote.src||"Bhagavad Gita 2.48"}</div>
         </div>
+        <button onPointerDown={()=>{
+          const today=new Date().toISOString().slice(0,10)
+          localStorage.removeItem("mtu_planned_"+today)
+          toast$("Planner reset — refresh to see it")
+        }} style={{width:"100%",minHeight:40,borderRadius:10,border:`1px solid ${T.line}`,background:"transparent",color:T.subtle,fontFamily:inter,fontWeight:600,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",marginBottom:8}}>
+          🧠 Reset Today's Planner (Debug)
+        </button>
         <button onPointerDown={handleLogout} style={{width:"100%",minHeight:48,borderRadius:10,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:15,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Sign Out</button>
       </div>
     </div>
@@ -586,7 +594,21 @@ export default function App({ user, onLogout }) {
 
       {/* Header */}
       <div style={{background:T.surface,borderBottom:`1px solid ${T.line}`,padding:"0 12px",height:44,display:"flex",alignItems:"center",gap:8,position:"sticky",top:0,zIndex:100,transition:"background .3s"}}>
-        <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink,flexShrink:0}}>⚡ <span style={{color:T.brand}}>VAJRA</span></div>
+        <div style={{fontFamily:mono,fontSize:15,fontWeight:700,color:T.ink,flexShrink:0,display:"flex",alignItems:"center",gap:6}}>
+          ⚡ <span style={{color:T.brand}}>VAJRA</span>
+          {(()=>{
+            const killed = st.killed_at || st.cooling_until
+            if(killed) return <span style={{display:"flex",alignItems:"center",gap:4,fontFamily:inter,fontSize:9,fontWeight:700,color:"#FF8C00",background:"#FF8C0015",border:"1px solid #FF8C0040",borderRadius:20,padding:"2px 7px",letterSpacing:"0.5px"}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#FF8C00",display:"inline-block"}}/>KILL SWITCH
+            </span>
+            if(brokerStatus==='connected') return <span style={{display:"flex",alignItems:"center",gap:4,fontFamily:inter,fontSize:9,fontWeight:700,color:"#2E7D32",background:"#2E7D3215",border:"1px solid #2E7D3240",borderRadius:20,padding:"2px 7px",letterSpacing:"0.5px"}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#2E7D32",boxShadow:"0 0 4px #2E7D32",display:"inline-block"}}/>LIVE
+            </span>
+            return <span style={{display:"flex",alignItems:"center",gap:4,fontFamily:inter,fontSize:9,fontWeight:700,color:"#C62828",background:"#C6282815",border:"1px solid #C6282840",borderRadius:20,padding:"2px 7px",letterSpacing:"0.5px"}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#C62828",display:"inline-block"}}/>OFFLINE
+            </span>
+          })()}
+        </div>
         <div style={{width:1,height:18,background:T.line,flexShrink:0}}/>
         <div style={{display:"flex",gap:12,alignItems:"center",overflowX:"auto",flex:1,scrollbarWidth:"none"}}>
           {[{n:"SENSEX",ltp:sensex?.ltp,chg:sensex?.change||0,pct:sensex?.pct||0},{n:"NIFTY",ltp:nifty?.ltp,chg:0,pct:0},{n:"VIX",ltp:vix,chg:0,pct:0}].map(({n,ltp,chg,pct})=>(
