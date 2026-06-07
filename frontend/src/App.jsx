@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo } from "react"
+import React, { useState, useEffect, useRef, useCallback, memo } from "react"
 import BrokerConnect from "./BrokerConnect.jsx"
 
 const API = "https://mtutrade.in/api"
@@ -62,6 +62,47 @@ function groupPositions(positions, lotSize) {
   return Object.values(grp).map(g => ({ ...g, avgEntry: g.totalCost / g.totalQty }))
 }
 
+function OrdersTab({ T, mono, inter }) {
+  const [orders, setOrders] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+  const fetchOrders = () => apiFetch("/vajra/orders").then(r => { setOrders(r?.orders||[]); setLoading(false) })
+  React.useEffect(() => {
+    fetchOrders()
+    const t = setInterval(fetchOrders, 5000)
+    return () => clearInterval(t)
+  }, [])
+  const statusColor = (s) => {
+    if (!s) return T.subtle
+    s = s.toLowerCase()
+    if (s.includes('complete') || s.includes('filled')) return T.buy
+    if (s.includes('reject') || s.includes('cancel')) return T.sell
+    return T.warn
+  }
+  if (loading) return <div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>Loading orders...</div>
+  if (!orders.length) return <div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>No orders today</div>
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr .6fr .8fr .8fr",padding:"7px 4px",background:T.raised,borderBottom:`1px solid ${T.line}`,position:"sticky",top:0,zIndex:10}}>
+        {["SYMBOL","STATUS","QTY","PRICE","TIME"].map(h=>(
+          <div key={h} style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1px"}}>{h}</div>
+        ))}
+      </div>
+      {orders.map(o=>(
+        <div key={o.order_id} style={{display:"grid",gridTemplateColumns:"2fr 1fr .6fr .8fr .8fr",padding:"9px 4px",borderBottom:`1px solid ${T.line}`,alignItems:"center",background:T.surface}}>
+          <div>
+            <div style={{fontFamily:mono,fontWeight:700,fontSize:11,color:T.ink}}>{o.trading_symbol}</div>
+            <div style={{fontSize:10,color:o.transaction_type==="SELL"?T.sell:T.buy,fontWeight:600}}>{o.transaction_type}</div>
+          </div>
+          <div style={{fontFamily:mono,fontSize:10,fontWeight:700,color:statusColor(o.status)}}>{o.status?.toUpperCase()}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{o.quantity}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{o.average_price||o.price||"MKT"}</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>{o.order_timestamp?.slice(11,16)||""}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function App({ user, onLogout }) {
   // ── State ────────────────────────────────────────────────────────────────
   const [dark,       setDark]       = useState(() => localStorage.getItem("mtu_dark") === "1")
@@ -88,6 +129,7 @@ export default function App({ user, onLogout }) {
   const [loading,    setLoading]    = useState(false)
   const [isMobile,   setIsMobile]   = useState(window.innerWidth < 768)
   const [brokerStatus, setBrokerStatus] = useState('disconnected')
+  const [pendingOrders, setPendingOrders] = useState([])
   const [drawerTab,  setDrawerTab]  = useState("broker")
   const [editingCfg, setEditingCfg] = useState(false)
   const [localCfg,   setLocalCfg]   = useState({})
@@ -96,6 +138,7 @@ export default function App({ user, onLogout }) {
   // ── Refs ─────────────────────────────────────────────────────────────────
   // posRef always has the latest positions — avoids stale closure in callbacks
   const posRef        = useRef([])
+  const refreshOrdersRef = useRef(null)
   const ceLtpValRef   = useRef(null)
   const peLtpValRef   = useRef(null)
   const wsRef         = useRef(null)
@@ -138,12 +181,14 @@ export default function App({ user, onLogout }) {
     // Polling (WS not yet available)
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
     const pollState  = async () => {
+      await apiFetch("/vajra/orders/sync", {method:"POST"})  // sync pending orders
       const r = await apiFetch("/vajra/state")
       if (!r) return
-      if (r.broker_status) setBrokerStatus(r.broker_status)  // always update broker status
-      if (blockPoll.current) return  // block position/pragnya updates only
+      if (r.broker_status) setBrokerStatus(r.broker_status)
+      if (blockPoll.current) return
       if (r.state) setPragnya(r)
-      if (r.trades) setPos(r.trades.filter(t=>t.status==="OPEN"))
+      const openTrades = r.trades ? r.trades.filter(t=>t.status==="OPEN") : []
+      setPos(openTrades)
     }
     pollMarket(); const t1=setInterval(pollMarket,5000)
     pollState();  const t2=setInterval(pollState,10000)
@@ -263,19 +308,20 @@ export default function App({ user, onLogout }) {
       return
     }
 
-    // INSTANT: add temp position to UI immediately
-    const tempId = `T${Date.now()}_${Math.random().toString(36).slice(2,6)}`
-    setPos(prev => [...prev, {
-      id: tempId,
-      instrument: instrKey,
-      direction:  action,
-      entry:      ltp,
-      sl:         action==="SELL" ? ltp+slPts : ltp-slPts,
-      target_price: action==="SELL" ? ltp-tgtPts : ltp+tgtPts,
-      status:     "OPEN",
-      extra_json: JSON.stringify({ lots: qty }),
-      _temp:      true,
-    }])
+    // INSTANT: add to orders tab immediately before API fires
+    const tempOrder = {
+      order_id: `TEMP_${Date.now()}`,
+      trading_symbol: instrKey,
+      transaction_type: action,
+      status: "placing...",
+      quantity: qty * instr.lot,
+      price: ltp,
+      average_price: ltp,
+      order_timestamp: new Date().toTimeString().slice(0,8),
+      _temp: true
+    }
+    setPendingOrders(prev => [...prev, tempOrder])
+    setTab("orders")
 
     // BACKGROUND: fire API, replace temp with real ID on success
     apiFetch("/vajra/trade/open", {
@@ -284,7 +330,8 @@ export default function App({ user, onLogout }) {
         instrument: instrKey, direction: action, entry: ltp,
         sl:     action==="SELL" ? ltp+slPts : ltp-slPts,
         target: action==="SELL" ? ltp-tgtPts : ltp+tgtPts,
-        lots: qty, strategy: `${action} ${optType}`
+        lots: qty, strategy: `${action} ${optType}`,
+        upstox_key: isCall ? ceKey : peKey
       })
     }).then(r => {
       if (r?.status === "ok") {
@@ -526,6 +573,7 @@ export default function App({ user, onLogout }) {
   return (
     <div style={{minHeight:"100vh",background:T.canvas,fontFamily:inter,transition:"background .3s",paddingTop:brokerStatus!=="connected"?"44px":"0"}}>
 
+      <div id="vajra-dbg" style={{position:"fixed",bottom:0,left:0,right:0,background:"#000",color:"#0f0",fontSize:10,padding:"2px 8px",zIndex:99999,fontFamily:"monospace"}}></div>
       {/* Toast — fixed, never shifts layout */}
       {toast&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:toast.ok?T.buy:T.sell,padding:"10px 16px",fontSize:13,fontWeight:600,color:"#fff",textAlign:"center",fontFamily:inter,pointerEvents:"none"}}>{toast.msg}</div>}
       {loading&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9998,height:2,background:T.brand}}/>}
@@ -741,7 +789,7 @@ export default function App({ user, onLogout }) {
             </div>
           )}
 
-          {tab==="orders"&&<div style={{padding:"40px",textAlign:"center",color:T.subtle,fontSize:13}}>Live order sync — Phase 2</div>}
+          {tab==="orders"&&<OrdersTab T={T} mono={mono} inter={inter} refreshRef={refreshOrdersRef}/>}
 
           {tab==="journal"&&(
             <div>

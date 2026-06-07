@@ -158,16 +158,16 @@ def log_violation(product: str, vtype: str, message: str, severity: str = "WARNI
     update_state(product, discipline_score=new_score)
 
 def add_trade(product: str, strategy: str, instrument: str, direction: str,
-              entry: float, sl: float, target: float, extra: dict = None) -> int:
+              entry: float, sl: float, target: float, extra: dict = None, status: str = "OPEN") -> int:
     conn = _conn()
     now = datetime.now(IST)
     cur = conn.execute(
         """INSERT INTO trades
-           (date,time,product,strategy,instrument,direction,entry,sl,target_price,extra_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+           (date,time,product,strategy,instrument,direction,entry,sl,target_price,extra_json,status)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), product, strategy,
          instrument, direction, entry, sl, target,
-         json.dumps(extra or {}))
+         json.dumps(extra or {}), status)
     )
     tid = cur.lastrowid
     conn.commit()

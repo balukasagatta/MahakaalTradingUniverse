@@ -25,8 +25,7 @@ function Root() {
         localStorage.removeItem("mtu_user")
       }
     }).catch(()=>{
-      const stored = localStorage.getItem("mtu_user")
-      if(stored) setUser(JSON.parse(stored))
+      // Don't set user from localStorage on auth failure — forces clean login
     }).finally(()=>setChecking(false))
   },[])
 
@@ -44,7 +43,7 @@ function Root() {
 
   if(!user) return <Login onSuccess={(data)=>setUser(data)}/>
   // Pass key={user.email} so App never remounts on re-render
-  return <App key={user.email} user={user} onLogout={handleLogout}/>
+  return <App user={user} onLogout={handleLogout}/>
 }
 
 createRoot(document.getElementById('root')).render(<Root/>)

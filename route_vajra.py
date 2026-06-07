@@ -30,6 +30,7 @@ DEFAULT_CFG = {
     "sl_points": 20,
     "target_points": 40,
     "enable_pre_trade_breathe": True,
+    "product_type": "I",
     "time_restrictions": {
         "no_trade_before": "09:15",
         "no_trade_after": "15:15",
@@ -126,13 +127,14 @@ async def get_vajra_state():
     }
 
 class TradeRequest(BaseModel):
-    instrument: str
-    direction:  str
-    entry:      float
-    sl:         float
-    target:     float
-    lots:       int   = 1
-    strategy:   str   = "MANUAL"
+    instrument:  str
+    direction:   str
+    entry:       float
+    sl:          float
+    target:      float
+    lots:        int   = 1
+    strategy:    str   = "MANUAL"
+    upstox_key:  str   = ""   # BSE_FO|... instrument key for real order
 
 class CloseRequest(BaseModel):
     trade_id:    int
@@ -140,17 +142,85 @@ class CloseRequest(BaseModel):
     exit_reason: str
 
 @router.post("/trade/open")
-async def open_trade(req: TradeRequest):
+async def open_trade(req: TradeRequest, request: Request):
     cfg = load_cfg()
     can_trade, _, lock = check_rules(PRODUCT, cfg)
     if not can_trade:
         raise HTTPException(403, lock.get("reason", "Cannot trade"))
     state = get_state(PRODUCT)
-    tid   = add_trade(PRODUCT, req.strategy, req.instrument, req.direction,
-                      req.entry, req.sl, req.target, extra={"lots": req.lots})
+
+    # Place real Upstox order if instrument key provided
+    upstox_order_id = None
+    print(f'trade/open called: instrument={req.instrument} upstox_key={repr(req.upstox_key)}')
+    if req.upstox_key:
+        try:
+            # Extract email from JWT
+            from jose import jwt as _jwt
+            auth_header = request.headers.get("Authorization","")
+            _token_str = auth_header.replace("Bearer ","")
+            _payload = _jwt.get_unverified_claims(_token_str)
+            email = _payload.get("sub") or _payload.get("email")
+            token = get_upstox_token(email)
+            print(f'Placing Upstox order for {email}, token={token[:20] if token else None}')
+            if token:
+                order_type = "MARKET"
+                transaction_type = "BUY" if req.direction == "BUY" else "SELL"
+                lot_size = 20  # Sensex default
+                qty = req.lots * lot_size
+                order_payload = {
+                    "quantity": qty,
+                    "product": cfg.get("product_type", "I"),
+                    "validity": "DAY",
+                    "price": 0,
+                    "tag": "VAJRA",
+                    "instrument_token": req.upstox_key,
+                    "order_type": order_type,
+                    "transaction_type": transaction_type,
+                    "disclosed_quantity": 0,
+                    "trigger_price": 0,
+                    "is_amo": False
+                }
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.post(
+                        "https://api.upstox.com/v2/order/place",
+                        json=order_payload,
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
+                    )
+                    print(f'Upstox order response: {r.status_code} {r.text[:200]}')
+                if r.status_code == 200:
+                        upstox_order_id = r.json().get("data", {}).get("order_id")
+                        # Check order status after brief delay
+                        if upstox_order_id:
+                            import asyncio
+                            await asyncio.sleep(1.5)
+                            sr = await client.get(
+                                f"https://api.upstox.com/v2/order/details?order_id={upstox_order_id}",
+                                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+                            )
+                            if sr.status_code == 200:
+                                od = sr.json().get("data", {})
+                                status = od.get("status", "")
+                                reason = od.get("status_message", "")
+                                if status in ("rejected", "cancelled"):
+                                    raise HTTPException(400, f"Order {status}: {reason}")
+                elif r.status_code == 401:
+                        raise HTTPException(401, "Broker session expired — reconnect from Settings")
+                else:
+                        err = r.json().get("errors", [{}])
+                        msg = err[0].get("message", "Order rejected by broker") if err else "Order rejected"
+                        raise HTTPException(400, f"Upstox: {msg}")
+        except Exception as e:
+            pass  # Fall through to paper trade if order fails
+
+    # If real order placed, mark as PENDING until exchange confirms
+    initial_status = "PENDING" if upstox_order_id else "OPEN"
+    tid = add_trade(PRODUCT, req.strategy, req.instrument, req.direction,
+                    req.entry, req.sl, req.target,
+                    extra={"lots": req.lots, "upstox_order_id": upstox_order_id},
+                    status=initial_status)
     update_state(PRODUCT, trades_taken=state["trades_taken"]+1,
                  last_trade_time=datetime.now(IST).strftime("%H:%M:%S"))
-    return {"status": "ok", "trade_id": tid}
+    return {"status": "ok", "trade_id": tid, "upstox_order_id": upstox_order_id}
 
 @router.post("/trade/close")
 async def close_trade_route(req: CloseRequest):
@@ -184,6 +254,40 @@ async def get_config():
 async def save_config(cfg: dict):
     json.dump(cfg, open(CFG_PATH, "w"), indent=2)
     return {"status": "ok"}
+
+# Per-user order cache — prevents hammering Upstox API
+_orders_cache = {}  # {email: {"data": [...], "ts": timestamp}}
+_ORDERS_CACHE_TTL = 2  # seconds
+
+@router.get("/orders")
+async def get_orders(request: Request):
+    try:
+        from jose import jwt as _jwt
+        auth_header = request.headers.get("Authorization","")
+        _token_str = auth_header.replace("Bearer ","")
+        _payload = _jwt.get_unverified_claims(_token_str)
+        email = _payload.get("sub") or _payload.get("email")
+        token = get_upstox_token(email)
+        if not token:
+            return {"orders": []}
+        # Serve from cache if fresh
+        import time as _time
+        cached = _orders_cache.get(email)
+        if cached and (_time.time() - cached["ts"]) < _ORDERS_CACHE_TTL:
+            return {"orders": cached["data"]}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://api.upstox.com/v2/order/retrieve-all",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            )
+            if r.status_code == 200:
+                orders = r.json().get("data", [])
+                vajra_orders = sorted([o for o in orders if o.get("tag") == "VAJRA"], key=lambda x: x.get("order_id",""), reverse=True)
+                _orders_cache[email] = {"data": vajra_orders, "ts": _time.time()}
+                return {"orders": vajra_orders}
+    except Exception as e:
+        print(f"Orders fetch error: {e}")
+    return {"orders": []}
 
 @router.post("/trade/close-all")
 async def close_all_trades(request: Request):
@@ -229,3 +333,49 @@ async def close_instrument_trades(request: Request):
     conn.commit()
     conn.close()
     return {"status":"ok","closed":n}
+
+@router.post("/orders/sync")
+async def sync_orders(request: Request):
+    """Sync PENDING orders from Upstox — call this on page load"""
+    try:
+        from jose import jwt as _jwt
+        auth_header = request.headers.get("Authorization","")
+        _payload = _jwt.get_unverified_claims(auth_header.replace("Bearer ",""))
+        email = _payload.get("sub") or _payload.get("email")
+        token = get_upstox_token(email)
+        if not token: return {"synced": 0}
+        # Get pending trades from DB
+        conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
+        pending = conn.execute(
+            "SELECT id, extra_json FROM trades WHERE status='PENDING' AND product=?", (PRODUCT,)
+        ).fetchall()
+        if not pending: conn.close(); return {"synced": 0}
+        # Check each order status from Upstox
+        synced = 0
+        async with httpx.AsyncClient(timeout=10) as client:
+            for trade_id, extra_json in pending:
+                extra = json.loads(extra_json or "{}")
+                order_id = extra.get("upstox_order_id")
+                if not order_id: continue
+                r = await client.get(
+                    f"https://api.upstox.com/v2/order/details?order_id={order_id}",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+                )
+                if r.status_code == 200:
+                    od = r.json().get("data", {})
+                    status = od.get("status", "").lower()
+                    if "complete" in status or "traded" in status:
+                        avg_price = od.get("average_price", 0)
+                        conn.execute(
+                            "UPDATE trades SET status='OPEN', entry=? WHERE id=?",
+                            (avg_price or extra.get("entry", 0), trade_id)
+                        )
+                        synced += 1
+                    elif "reject" in status or "cancel" in status:
+                        conn.execute("UPDATE trades SET status='CLOSED', exit_reason='REJECTED' WHERE id=?", (trade_id,))
+                        synced += 1
+        conn.commit()
+        conn.close()
+        return {"synced": synced}
+    except Exception as e:
+        return {"error": str(e)}
