@@ -275,7 +275,11 @@ export default function App({ user, onLogout }) {
   // RULE 5: Toast only on Exit/SL/CloseAll. Never on entry.
   // ─────────────────────────────────────────────────────────────────────────
 
+  const execLock = useRef(false)
   const execute = useCallback((type) => {
+    if (execLock.current) return
+    execLock.current = true
+    setTimeout(() => execLock.current = false, 2000)
     const isCall   = type.includes("Call")
     const ltp      = isCall ? ceLtpValRef.current : peLtpValRef.current
     const strike   = isCall ? ceStrike : peStrike
@@ -442,6 +446,7 @@ export default function App({ user, onLogout }) {
   }
   const lbl = t => <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:3}}>{t}</div>
 
+  const haptic = () => { try { navigator.vibrate && navigator.vibrate(30) } catch(e){} }
   const ExecBtn = ({ text, sub, onClick, color }) => (
     <button onPointerDown={onClick}
       style={{

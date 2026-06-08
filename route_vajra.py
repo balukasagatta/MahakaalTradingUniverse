@@ -154,64 +154,112 @@ async def open_trade(req: TradeRequest, request: Request):
     print(f'trade/open called: instrument={req.instrument} upstox_key={repr(req.upstox_key)}')
     if req.upstox_key:
         try:
-            # Extract email from JWT
             from jose import jwt as _jwt
             auth_header = request.headers.get("Authorization","")
-            _token_str = auth_header.replace("Bearer ","")
-            _payload = _jwt.get_unverified_claims(_token_str)
+            _payload = _jwt.get_unverified_claims(auth_header.replace("Bearer ",""))
             email = _payload.get("sub") or _payload.get("email")
-            token = get_upstox_token(email)
-            print(f'Placing Upstox order for {email}, token={token[:20] if token else None}')
-            if token:
-                order_type = "MARKET"
-                transaction_type = "BUY" if req.direction == "BUY" else "SELL"
-                lot_size = 20  # Sensex default
-                qty = req.lots * lot_size
-                order_payload = {
-                    "quantity": qty,
-                    "product": cfg.get("product_type", "I"),
-                    "validity": "DAY",
-                    "price": 0,
-                    "tag": "VAJRA",
-                    "instrument_token": req.upstox_key,
-                    "order_type": order_type,
-                    "transaction_type": transaction_type,
-                    "disclosed_quantity": 0,
-                    "trigger_price": 0,
-                    "is_amo": False,
-                    "variety": "NORMAL"
-                }
-                async with httpx.AsyncClient(timeout=10) as client:
+
+            # Detect connected broker
+            tokens = json.load(open(os.path.expanduser("~/mahakaal/user_tokens.json")))
+            user_tokens = tokens.get(email, {})
+            broker = None
+            broker_token = None
+            broker_info = {}
+            for b in ["upstox", "dhan", "fyers", "zerodha"]:
+                bt = user_tokens.get(b, {})
+                if bt.get("access_token"):
+                    broker = b
+                    broker_token = bt["access_token"]
+                    broker_info = bt
+                    break
+
+            if not broker or not broker_token:
+                raise HTTPException(400, "No broker connected — connect from Settings")
+
+            lot_size = 20
+            qty = req.lots * lot_size
+            transaction_type = req.direction  # BUY or SELL
+            product_type = cfg.get("product_type", "I")
+
+            print(f'Placing {broker} order for {email}: {transaction_type} {qty} {req.upstox_key}')
+
+            async with httpx.AsyncClient(timeout=10) as client:
+                if broker == "upstox":
+                    order_payload = {
+                        "quantity": qty, "product": product_type,
+                        "validity": "DAY", "price": 0, "tag": "VAJRA",
+                        "instrument_token": req.upstox_key,
+                        "order_type": "MARKET", "transaction_type": transaction_type,
+                        "disclosed_quantity": 0, "trigger_price": 0,
+                        "is_amo": False, "variety": "NORMAL"
+                    }
                     r = await client.post(
                         "https://api.upstox.com/v2/order/place",
                         json=order_payload,
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
+                        headers={"Authorization": f"Bearer {broker_token}", "Content-Type": "application/json", "Accept": "application/json"}
                     )
-                    print(f'Upstox order response: {r.status_code} {r.text[:200]}')
-                if r.status_code == 200:
+                    print(f'Upstox response: {r.status_code} {r.text[:200]}')
+                    if r.status_code == 200:
                         upstox_order_id = r.json().get("data", {}).get("order_id")
-                        # Check order status after brief delay
-                        if upstox_order_id:
-                            import asyncio
-                            await asyncio.sleep(1.5)
-                            sr = await client.get(
-                                f"https://api.upstox.com/v2/order/details?order_id={upstox_order_id}",
-                                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
-                            )
-                            if sr.status_code == 200:
-                                od = sr.json().get("data", {})
-                                status = od.get("status", "")
-                                reason = od.get("status_message", "")
-                                if status in ("rejected", "cancelled"):
-                                    raise HTTPException(400, f"Order {status}: {reason}")
-                elif r.status_code == 401:
+                    elif r.status_code == 401:
                         raise HTTPException(401, "Broker session expired — reconnect from Settings")
-                else:
+                    else:
                         err = r.json().get("errors", [{}])
-                        msg = err[0].get("message", "Order rejected by broker") if err else "Order rejected"
+                        msg = err[0].get("message", "Order rejected") if err else "Order rejected"
+                        if "UDAPI1162" in r.text:
+                            msg = "AMO via API not supported by Upstox. Use Dhan or place during market hours."
                         raise HTTPException(400, f"Upstox: {msg}")
+
+                elif broker == "dhan":
+                    client_id = broker_info.get("client_id", "")
+                    # BSE_FO|1132638 → security_id = 1132638
+                    security_id = req.upstox_key.split("|")[-1] if "|" in req.upstox_key else req.upstox_key
+                    dhan_product = "INTRADAY" if product_type == "I" else "CNC"
+                    # Determine option type from instrument key
+                    opt_type = "CALL" if req.instrument.endswith("CE") else "PUT"
+                    # Extract strike from instrument e.g. SENSEX73500CE → 73500
+                    import re as _re
+                    strike_match = _re.search(r'(\d+)(CE|PE)$', req.instrument)
+                    strike_price = float(strike_match.group(1)) if strike_match else 0.0
+                    order_payload = {
+                        "dhanClientId": client_id,
+                        "transactionType": transaction_type,
+                        "exchangeSegment": "BSE_FNO",
+                        "productType": dhan_product,
+                        "orderType": "MARKET",
+                        "validity": "DAY",
+                        "tradingSymbol": "",
+                        "securityId": security_id,
+                        "quantity": qty,
+                        "disclosedQuantity": 0,
+                        "price": 0,
+                        "triggerPrice": 0,
+                        "afterMarketOrder": False,
+                        "amoTime": "",
+                        "boProfitValue": 0,
+                        "boStopLossValue": 0,
+                        "drvExpiryDate": "",
+                        "drvOptionType": opt_type,
+                        "drvStrikePrice": strike_price
+                    }
+                    r = await client.post(
+                        "https://api.dhan.co/v2/orders",
+                        json=order_payload,
+                        headers={"access-token": broker_token, "client-id": client_id, "Content-Type": "application/json"}
+                    )
+                    print(f'Dhan response: {r.status_code} {r.text[:300]}')
+                    if r.status_code == 200:
+                        upstox_order_id = r.json().get("orderId") or r.json().get("data", {}).get("orderId")
+                    elif r.status_code == 401:
+                        raise HTTPException(401, "Dhan session expired — reconnect from Settings")
+                    else:
+                        raise HTTPException(400, f"Dhan: {r.text[:200]}")
+
+        except HTTPException:
+            raise
         except Exception as e:
-            pass  # Fall through to paper trade if order fails
+            print(f'Order placement error: {e}')
+            pass  # Fall through to paper trade
 
     # If real order placed, mark as PENDING until exchange confirms
     initial_status = "PENDING" if upstox_order_id else "OPEN"
@@ -383,42 +431,76 @@ async def sync_orders(request: Request):
 
 @router.post("/orders/cancel-all")
 async def cancel_all_orders(request: Request):
-    """Cancel all open/pending Upstox orders tagged VAJRA"""
+    """Cancel all open/pending orders tagged VAJRA"""
+    import sqlite3 as _sqlite3
     try:
         from jose import jwt as _jwt
         auth_header = request.headers.get("Authorization","")
         _payload = _jwt.get_unverified_claims(auth_header.replace("Bearer ",""))
         email = _payload.get("sub") or _payload.get("email")
-        token = get_upstox_token(email)
-        if not token:
-            raise HTTPException(400, "Broker not connected")
+
+        # Detect active broker
+        tokens = json.load(open(os.path.expanduser("~/mahakaal/user_tokens.json")))
+        user_tokens = tokens.get(email, {})
+        broker = None
+        broker_token = None
+        broker_info = {}
+        for b in ["upstox", "dhan"]:
+            bt = user_tokens.get(b, {})
+            if bt.get("access_token"):
+                broker = b
+                broker_token = bt["access_token"]
+                broker_info = bt
+                break
+
+        if not broker or not broker_token:
+            raise HTTPException(400, "No broker connected")
+
+        cancelled = 0
         async with httpx.AsyncClient(timeout=10) as client:
-            # Get all open orders
-            r = await client.get(
-                "https://api.upstox.com/v2/order/retrieve-all",
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
-            )
-            if r.status_code != 200:
-                raise HTTPException(400, "Failed to fetch orders")
-            orders = r.json().get("data", [])
-            # Filter VAJRA open orders
-            to_cancel = [o for o in orders if o.get("tag") == "VAJRA"
-                        and o.get("status","").lower() not in ("complete","cancelled","rejected","cancelled after market order")]
-            cancelled = 0
-            for o in to_cancel:
-                cr = await client.delete(
-                    f"https://api.upstox.com/v2/order/{o['order_id']}",
-                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            if broker == "upstox":
+                r = await client.get(
+                    "https://api.upstox.com/v2/order/retrieve-all",
+                    headers={"Authorization": f"Bearer {broker_token}", "Accept": "application/json"}
                 )
-                if cr.status_code == 200:
-                    cancelled += 1
-            # Mark pending trades as closed in DB
-            conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
-            conn.execute("UPDATE trades SET status='CLOSED',exit_reason='CANCELLED' WHERE status='PENDING' AND product=?", (PRODUCT,))
-            conn.commit()
-            conn.close()
-            return {"status": "ok", "cancelled": cancelled}
+                if r.status_code == 200:
+                    orders = r.json().get("data", [])
+                    to_cancel = [o for o in orders if o.get("tag") == "VAJRA"
+                                and o.get("status","").lower() not in ("complete","cancelled","rejected","cancelled after market order")]
+                    for o in to_cancel:
+                        cr = await client.delete(
+                            f"https://api.upstox.com/v2/order/{o['order_id']}",
+                            headers={"Authorization": f"Bearer {broker_token}", "Accept": "application/json"}
+                        )
+                        if cr.status_code == 200:
+                            cancelled += 1
+
+            elif broker == "dhan":
+                client_id = broker_info.get("client_id", "")
+                r = await client.get(
+                    "https://api.dhan.co/v2/orders",
+                    headers={"access-token": broker_token, "client-id": client_id, "Content-Type": "application/json"}
+                )
+                if r.status_code == 200:
+                    orders = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+                    to_cancel = [o for o in orders if o.get("orderStatus","").upper() in ("PENDING","TRANSIT","PARTIALLY_TRADED")]
+                    for o in to_cancel:
+                        cr = await client.delete(
+                            f"https://api.dhan.co/v2/orders/{o['orderId']}",
+                            headers={"access-token": broker_token, "client-id": client_id, "Content-Type": "application/json"}
+                        )
+                        if cr.status_code in (200, 202):
+                            cancelled += 1
+
+        # Mark pending trades as closed in DB
+        conn = _sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
+        conn.execute("UPDATE trades SET status='CLOSED',exit_reason='CANCELLED' WHERE status='PENDING' AND product=?", (PRODUCT,))
+        conn.commit()
+        conn.close()
+        return {"status": "ok", "cancelled": cancelled}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+

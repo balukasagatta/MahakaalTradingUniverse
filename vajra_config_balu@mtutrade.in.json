@@ -1,6 +1,11 @@
 {
-  "max_trades_per_day": 9999,
-  "daily_loss_limit": -100000,
-  "daily_target": 100000,
-  "max_sl_hits": 9999
+  "max_trades_per_day": 4,
+  "daily_loss_limit": -2500,
+  "daily_target": 5000,
+  "max_sl_hits": 2,
+  "sl_points": 20,
+  "target_points": 40,
+  "product_type": "I",
+  "cooling_minutes_after_sl": 15,
+  "enable_pre_trade_breathe": true
 }

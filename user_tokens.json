@@ -1,8 +1,9 @@
 {
   "balu@mtutrade.in": {
-    "upstox": {
-      "access_token": "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiJCQjMyOTYiLCJqdGkiOiI2YTIzY2VmYjA4MjAxMjE2ZjdmMDIwMTUiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzgwNzMxNjQzLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3ODA3ODMyMDB9.DHnOSAZICJRWjUM4UvgPbfUeAsT6iW6y8bO--UqrTJU",
-      "connected_at": "2026-06-06T13:10:43.264016+05:30"
+    "dhan": {
+      "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgxMDE0NDczLCJpYXQiOjE3ODA5MjgwNzMsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMDAwNzA5MTAzIn0.lSFJHNDXtHT0LaF_TZ8eC_sH-26urPWMzWFtEnDCJOUQaPSsaNS4ND_Oopeu0h6enSMfMgp8ToYrTFCok3yvHg",
+      "connected_at": "2026-06-08T21:20:31.543229+05:30",
+      "client_id": "1000709103"
     }
   }
 }
