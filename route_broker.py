@@ -147,12 +147,13 @@ def _decode_state(state: str) -> str:
     try: return base64.urlsafe_b64decode(state.encode()).decode()
     except: return state
 
-def _store_token(email: str, broker: str, token: str):
+def _store_token(email: str, broker: str, token: str, extra: dict = None):
     tokens = _load_tokens()
     if email not in tokens: tokens[email] = {}
     tokens[email][broker] = {
         "access_token": token,
         "connected_at": datetime.now(IST).isoformat(),
+        **(extra or {})
     }
     _save_tokens(tokens)
 
@@ -174,6 +175,31 @@ async def upstox_callback(code: str=None, state: str=None, error: str=None):
         return RedirectResponse(f"/vajra/?broker_error=upstox&reason=token_failed")
     _store_token(email, "upstox", data["access_token"])
     return RedirectResponse(f"/vajra/?broker_success=upstox")
+
+@router.post("/dhan/token")
+async def dhan_direct_token(request: Request):
+    """Dhan uses direct access token — no OAuth"""
+    data = await request.json()
+    access_token = data.get("access_token")
+    client_id = data.get("client_id")
+    if not access_token or not client_id:
+        raise HTTPException(400, "access_token and client_id required")
+    # Verify token works
+    import httpx
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        r = await client.get(
+            "https://api.dhan.co/v2/fundlimit",
+            headers={"access-token": access_token, "client-id": client_id, "Content-Type": "application/json"}
+        )
+        if r.status_code != 200:
+            raise HTTPException(400, f"Invalid Dhan token: {r.text[:100]}")
+    # Get email from JWT
+    from jose import jwt as _jwt
+    auth = request.headers.get("Authorization","")
+    _payload = _jwt.get_unverified_claims(auth.replace("Bearer ",""))
+    email = _payload.get("sub") or _payload.get("email")
+    _store_token(email, "dhan", access_token, extra={"client_id": client_id})
+    return {"status": "ok", "broker": "dhan"}
 
 @router.get("/dhan/callback")
 async def dhan_callback(code: str=None, state: str=None, error: str=None):

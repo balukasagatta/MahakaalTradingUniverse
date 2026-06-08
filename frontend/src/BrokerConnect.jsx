@@ -46,8 +46,27 @@ export default function BrokerConnect({ T, user, onConnected, onDisconnected }) 
     try {
       const r = await fetch(`${API}/auth/broker/save-creds`,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},credentials:"include",body:JSON.stringify({broker:selected,...fields})})
       const d = await r.json()
-      if(d.status==="ok"){ window.location.href = `${API}/auth/broker/connect/${selected}?token=${token}` }
-      else { setError(d.detail||"Failed") }
+      if(d.status==="ok"){
+        if(selected === "dhan") {
+          const dr = await fetch(`${API}/auth/broker/dhan/token`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", "Authorization": `Bearer ${token}`},
+            credentials: "include",
+            body: JSON.stringify({ client_id: fields.user_id, access_token: fields.api_key })
+          })
+          const dd = await dr.json()
+          if(dd.status === "ok") {
+            if(onConnected) onConnected("Dhan")
+            // Reload connected brokers
+            const tk = localStorage.getItem("mtu_token")
+            fetch(`${API}/auth/broker/my-brokers`,{headers:{"Authorization":`Bearer ${tk}`},credentials:"include"})
+              .then(r=>r.json()).then(d=>{ if(d.brokers) setConnected(d.brokers) }).catch(()=>{})
+          }
+          else { setError(dd.detail || "Dhan connection failed") }
+        } else {
+          window.location.href = `${API}/auth/broker/connect/${selected}?token=${token}`
+        }
+      } else { setError(d.detail||"Failed") }
     } catch(e){ setError("Connection error") }
     setSaving(false)
   }

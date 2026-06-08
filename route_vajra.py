@@ -178,7 +178,8 @@ async def open_trade(req: TradeRequest, request: Request):
                     "transaction_type": transaction_type,
                     "disclosed_quantity": 0,
                     "trigger_price": 0,
-                    "is_amo": False
+                    "is_amo": False,
+                    "variety": "NORMAL"
                 }
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.post(
@@ -379,3 +380,45 @@ async def sync_orders(request: Request):
         return {"synced": synced}
     except Exception as e:
         return {"error": str(e)}
+
+@router.post("/orders/cancel-all")
+async def cancel_all_orders(request: Request):
+    """Cancel all open/pending Upstox orders tagged VAJRA"""
+    try:
+        from jose import jwt as _jwt
+        auth_header = request.headers.get("Authorization","")
+        _payload = _jwt.get_unverified_claims(auth_header.replace("Bearer ",""))
+        email = _payload.get("sub") or _payload.get("email")
+        token = get_upstox_token(email)
+        if not token:
+            raise HTTPException(400, "Broker not connected")
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Get all open orders
+            r = await client.get(
+                "https://api.upstox.com/v2/order/retrieve-all",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            )
+            if r.status_code != 200:
+                raise HTTPException(400, "Failed to fetch orders")
+            orders = r.json().get("data", [])
+            # Filter VAJRA open orders
+            to_cancel = [o for o in orders if o.get("tag") == "VAJRA"
+                        and o.get("status","").lower() not in ("complete","cancelled","rejected","cancelled after market order")]
+            cancelled = 0
+            for o in to_cancel:
+                cr = await client.delete(
+                    f"https://api.upstox.com/v2/order/{o['order_id']}",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}
+                )
+                if cr.status_code == 200:
+                    cancelled += 1
+            # Mark pending trades as closed in DB
+            conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
+            conn.execute("UPDATE trades SET status='CLOSED',exit_reason='CANCELLED' WHERE status='PENDING' AND product=?", (PRODUCT,))
+            conn.commit()
+            conn.close()
+            return {"status": "ok", "cancelled": cancelled}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))

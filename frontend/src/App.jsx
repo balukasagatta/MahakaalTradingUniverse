@@ -320,6 +320,7 @@ export default function App({ user, onLogout }) {
       order_timestamp: new Date().toTimeString().slice(0,8),
       _temp: true
     }
+    const tempId = tempOrder.order_id
     setPendingOrders(prev => [...prev, tempOrder])
     setTab("orders")
 
@@ -708,7 +709,11 @@ export default function App({ user, onLogout }) {
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,padding:"8px 10px"}}>
               <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All</button>
-              <button onPointerDown={()=>toast$("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel Orders</button>
+              <button onPointerDown={async()=>{
+              const r = await apiFetch("/vajra/orders/cancel-all",{method:"POST"})
+              if(r?.status==="ok") toast$(`Cancelled ${r.cancelled} order${r.cancelled!==1?"s":""}`, true)
+              else toast$("Cancel failed — check broker connection", false)
+            }} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel Orders</button>
             </div>
           </div>
         ):(
@@ -730,7 +735,11 @@ export default function App({ user, onLogout }) {
               </div>
               <div style={{width:"100%",display:"flex",flexDirection:"column",gap:6,margin:"10px 0"}}>
                 <button onPointerDown={closeAll} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.sell}`,background:"transparent",color:T.sell,fontFamily:inter,fontWeight:700,fontSize:13,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Close All Positions</button>
-                <button onPointerDown={()=>toast$("Orders cancelled")} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel All Orders</button>
+                <button onPointerDown={async()=>{
+              const r = await apiFetch("/vajra/orders/cancel-all",{method:"POST"})
+              if(r?.status==="ok") toast$(`Cancelled ${r.cancelled} order${r.cancelled!==1?"s":""}`, true)
+              else toast$("Cancel failed — check broker connection", false)
+            }} style={{minHeight:36,borderRadius:8,border:`1.5px solid ${T.line}`,background:"transparent",color:T.body,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>Cancel All Orders</button>
               </div>
               <div style={{width:"100%",padding:"8px 10px",border:`1px solid ${T.line}`,borderRadius:8,background:T.raised}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
