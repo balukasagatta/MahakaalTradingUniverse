@@ -9,3 +9,12 @@ mahakaal.db
 iv_history.json
 .env.upstox
 *.deb
+*.db-shm
+*.db-wal
+*.db
+user_tokens.json
+mtu_users.json
+vajra_config_*.json
+env.vars
+*.pyc
+__pycache__/
