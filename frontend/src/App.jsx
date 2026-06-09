@@ -93,7 +93,7 @@ function OrdersTab({ T, mono, inter }) {
             <div style={{fontFamily:mono,fontWeight:700,fontSize:11,color:T.ink}}>{o.trading_symbol}</div>
             <div style={{fontSize:10,color:o.transaction_type==="SELL"?T.sell:T.buy,fontWeight:600}}>{o.transaction_type}</div>
           </div>
-          <div style={{fontFamily:mono,fontSize:10,fontWeight:700,color:statusColor(o.status)}}>{o.status?.toUpperCase()}</div>
+          <div style={{fontFamily:mono,fontSize:10,fontWeight:700,color:o.status==="REJECTED"?T.sell:statusColor(o.status)}}>{o.status?.toUpperCase()}</div>
           <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{o.quantity}</div>
           <div style={{fontFamily:mono,fontSize:11,color:T.ink}}>{o.average_price||o.price||"MKT"}</div>
           <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>{o.order_timestamp?.slice(11,16)||""}</div>
@@ -176,7 +176,6 @@ export default function App({ user, onLogout }) {
     // ── SINGLE SOURCE OF TRUTH for broker status ──
     const p = new URLSearchParams(window.location.search)
     if (window.location.search) window.history.replaceState({}, document.title, window.location.pathname)
-    if (p.get("broker_error")) toast$(`Failed: ${p.get("broker_error")}`, false)
 
     // Polling (WS not yet available)
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
@@ -357,6 +356,7 @@ export default function App({ user, onLogout }) {
         setPos(prev => prev.filter(p => p.id !== tempId))
         const msg = r?.detail || "Order failed"
         if (msg.toLowerCase().includes("lock")) setGitaMsg(msg)
+        else toast$(msg, false)
       }
     })
   }, [ceStrike, peStrike, symbol, qty, slPts, tgtPts])

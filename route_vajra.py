@@ -58,8 +58,8 @@ async def fetch_ltp_multi(keys: list, email: str = None) -> dict:
 def parse_ltp(data: dict, key: str) -> dict:
     colon_key = key.replace("|", ":")
     d = data.get(colon_key) or data.get(key) or {}
-    ltp   = d.get("last_price", 0)
-    close = d.get("cp", 0)
+    ltp   = d.get("last_price") or d.get("ltp") or 0
+    close = d.get("cp") or d.get("close") or 0
     chg   = round(ltp - close, 2) if ltp and close else 0
     pct   = round((chg / close) * 100, 2) if close else 0
     return {"ltp": ltp, "close": close, "change": chg, "pct": pct}
@@ -207,8 +207,8 @@ async def open_trade(req: TradeRequest, request: Request):
                         err = r.json().get("errors", [{}])
                         msg = err[0].get("message", "Order rejected") if err else "Order rejected"
                         if "UDAPI1162" in r.text:
-                            msg = "AMO via API not supported by Upstox. Use Dhan or place during market hours."
-                        raise HTTPException(400, f"Upstox: {msg}")
+                            msg = "After Market Orders are not supported via API. Please place during market hours (9:15 AM - 3:30 PM)."
+                        raise HTTPException(400, msg)
 
                 elif broker == "dhan":
                     client_id = broker_info.get("client_id", "")
@@ -253,13 +253,18 @@ async def open_trade(req: TradeRequest, request: Request):
                     elif r.status_code == 401:
                         raise HTTPException(401, "Dhan session expired — reconnect from Settings")
                     else:
-                        raise HTTPException(400, f"Dhan: {r.text[:200]}")
+                        try:
+                            err_data = r.json()
+                            msg = err_data.get("message") or err_data.get("errorMessage") or r.text[:200]
+                        except Exception:
+                            msg = r.text[:200]
+                        raise HTTPException(400, msg)
 
         except HTTPException:
             raise
         except Exception as e:
             print(f'Order placement error: {e}')
-            pass  # Fall through to paper trade
+            raise HTTPException(500, f'Order failed: {str(e)}')
 
     # If real order placed, mark as PENDING until exchange confirms
     initial_status = "PENDING" if upstox_order_id else "OPEN"
@@ -503,4 +508,32 @@ async def cancel_all_orders(request: Request):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@router.post("/pragnya/emotion")
+async def save_emotion(request: Request):
+    try:
+        body = await request.json()
+        email = None
+        try:
+            from route_auth import verify_token
+            token = request.cookies.get("mtu_token")
+            if not token:
+                auth = request.headers.get("authorization","")
+                if auth.startswith("Bearer "): token = auth[7:]
+            if token: email = verify_token(token)["sub"]
+        except: pass
+        save_eod_emotion(PRODUCT, body.get("emotion",""), body.get("note",""))
+        add_reward(PRODUCT, "EMOTION_LOGGED")
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
+@router.get("/pragnya/rewards")
+async def get_rewards(request: Request):
+    try:
+        total = get_total_rewards()
+        history = get_rewards_history(20)
+        eod = get_eod_emotion(PRODUCT)
+        violations = get_today_violations(PRODUCT)
+        return {"total_points": total, "history": history, "eod": eod, "violations": violations}
+    except Exception as e:
+        raise HTTPException(500, str(e))
