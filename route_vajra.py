@@ -735,7 +735,10 @@ async def get_heatmap(expiry: str = ''):
             )
             all_expiries = er.json().get('data', [])[:4]
             if not expiry:
-                expiry = all_expiries[0] if all_expiries else ''
+                from datetime import date as _date
+                today = _date.today().isoformat()
+                valid = [e for e in all_expiries if e > today] or all_expiries
+                expiry = valid[0] if valid else (all_expiries[0] if all_expiries else "")
             cr = await client.post(
                 'https://api.dhan.co/v2/optionchain',
                 json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I', 'Expiry': expiry},
