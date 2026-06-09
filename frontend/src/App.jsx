@@ -132,9 +132,10 @@ export default function App({ user, onLogout }) {
   const [pendingOrders, setPendingOrders] = useState([])
   const [drawerTab,  setDrawerTab]  = useState("broker")
   const [heatmap,    setHeatmap]    = useState(null)
+  const [oiTab,      setOiTab]      = useState(0)
+  const [stocks,     setStocks]     = useState(null)
   const [hmExpiry,   setHmExpiry]   = useState("")
   const [trend,      setTrend]      = useState(null)
-  const [oiTab,      setOiTab]      = useState(0)
   const [editingCfg, setEditingCfg] = useState(false)
   const [localCfg,   setLocalCfg]   = useState({})
   const [cfgSaved,   setCfgSaved]   = useState(false)
@@ -185,6 +186,7 @@ export default function App({ user, onLogout }) {
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
     fetchTrend()
     fetchHeatmap()
+    fetchStocks(symbol)
     const trendInterval = setInterval(fetchTrend, 60000)
     const pollState  = async () => {
       await apiFetch("/vajra/orders/sync", {method:"POST"})  // sync pending orders
@@ -459,6 +461,11 @@ export default function App({ user, onLogout }) {
     const url = expiry ? `/vajra/heatmap?expiry=${expiry}` : "/vajra/heatmap"
     const r = await apiFetch(url)
     if (r && !r.error) { setHeatmap(r); setHmExpiry(r.expiry) }
+  }
+
+  const fetchStocks = async (sym) => {
+    const r = await apiFetch(`/vajra/stocks?symbol=${sym||symbol}`)
+    if (r && !r.error) setStocks(r)
   }
 
   const fetchTrend = async () => {
@@ -845,220 +852,249 @@ export default function App({ user, onLogout }) {
 
           {/* ── Options Intelligence Panel ── */}
           {tab==="positions"&&(
-            <div style={{marginTop:8}}>
+            <div style={{marginTop:12}}>
 
-              {/* Trend Engine Bar */}
+              {/* Trend Bar */}
               {trend&&(
-                <div style={{padding:"10px 12px",background:trend.bias==="BULLISH"?T.buy+"18":trend.bias==="BEARISH"?T.sell+"18":T.raised,borderRadius:10,border:`1px solid ${trend.bias==="BULLISH"?T.buy+"40":trend.bias==="BEARISH"?T.sell+"40":T.line}`,marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:trend.bias==="BULLISH"?T.buy:trend.bias==="BEARISH"?T.sell:T.subtle}}>
-                      {trend.bias==="BULLISH"?"▲":trend.bias==="BEARISH"?"▼":"◆"} {trend.bias}
+                <div style={{padding:"10px 14px",borderRadius:10,marginBottom:10,
+                  background:trend.bias==="BULLISH"?T.buy+"18":trend.bias==="BEARISH"?T.sell+"18":T.raised,
+                  border:`1px solid ${trend.bias==="BULLISH"?T.buy+"44":trend.bias==="BEARISH"?T.sell+"44":T.line}`,
+                  display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:18}}>{trend.bias==="BULLISH"?"▲":trend.bias==="BEARISH"?"▼":"◆"}</span>
+                    <div>
+                      <div style={{fontFamily:mono,fontSize:13,fontWeight:700,color:trend.bias==="BULLISH"?T.buy:trend.bias==="BEARISH"?T.sell:T.subtle}}>{trend.bias}</div>
+                      <div style={{fontFamily:mono,fontSize:8,color:T.subtle}}>{trend.regime==="MARKET_CLOSED"?"Market Closed":trend.regime+" VOL"} · ATR {trend.atr||"—"}</div>
                     </div>
-                    <div style={{fontFamily:mono,fontSize:9,color:T.subtle}}>{trend.regime} VOL</div>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{fontFamily:mono,fontSize:9,color:T.subtle}}>ATR {trend.atr}</div>
-                    <div style={{background:T.line,borderRadius:100,height:6,width:60}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:T.ink}}>{trend.confidence}%</div>
+                    <div style={{background:T.line,borderRadius:100,height:4,width:60,marginTop:3}}>
                       <div style={{width:`${trend.confidence}%`,height:"100%",borderRadius:100,background:trend.bias==="BULLISH"?T.buy:trend.bias==="BEARISH"?T.sell:T.subtle}}/>
                     </div>
-                    <div style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.ink}}>{trend.confidence}%</div>
                   </div>
                 </div>
               )}
 
-              {/* Options Intelligence Panel */}
-              {heatmap&&(()=>{
-                const fmtOi = v => v>=10000000?(v/10000000).toFixed(1)+"Cr":v>=100000?(v/100000).toFixed(1)+"L":v>=1000?(v/1000).toFixed(0)+"K":v
-                const fmtChg = v => {
-                  const abs = Math.abs(v)
-                  const s = v>=0?"+":"-"
-                  return s+(abs>=100000?(abs/100000).toFixed(1)+"L":abs>=1000?(abs/1000).toFixed(0)+"K":abs)
-                }
-                const biasColor = b => b==="BULLISH"?T.buy:b==="BEARISH"?T.sell:b==="NEUTRAL"?T.subtle:"#FF8C00"
-                return(
-                <div style={{background:T.surface,borderRadius:12,border:`1px solid ${T.line}`,overflow:"hidden"}}>
+              {/* Options Intelligence */}
+              {heatmap&&(
+                <div style={{background:T.surface,borderRadius:12,border:`1px solid ${T.line}`,overflow:"hidden",marginBottom:12}}>
 
                   {/* Header */}
-                  <div style={{padding:"10px 12px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{padding:"10px 12px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:T.raised}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase"}}>Options Intelligence</div>
-                      <div style={{padding:"2px 8px",borderRadius:10,background:biasColor(heatmap.overall_bias)+"22",border:`1px solid ${biasColor(heatmap.overall_bias)}44`,fontFamily:mono,fontSize:9,fontWeight:700,color:biasColor(heatmap.overall_bias)}}>
+                      <span style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase"}}>Options Intelligence</span>
+                      <span style={{padding:"2px 7px",borderRadius:8,fontFamily:mono,fontSize:9,fontWeight:700,
+                        background:heatmap.overall_bias==="BULLISH"?T.buy+"22":heatmap.overall_bias==="BEARISH"?T.sell+"22":T.line,
+                        color:heatmap.overall_bias==="BULLISH"?T.buy:heatmap.overall_bias==="BEARISH"?T.sell:T.subtle}}>
                         {heatmap.overall_bias}
-                      </div>
+                      </span>
+                      <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:heatmap.pcr>1.2?T.buy:heatmap.pcr<0.8?T.sell:T.subtle}}>PCR {heatmap.pcr}</span>
                     </div>
                     <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <div style={{fontFamily:mono,fontSize:9,color:T.subtle}}>PCR</div>
-                      <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:heatmap.pcr>1.2?T.buy:heatmap.pcr<0.8?T.sell:T.subtle}}>{heatmap.pcr}</div>
                       <select value={hmExpiry} onChange={e=>{setHmExpiry(e.target.value);fetchHeatmap(e.target.value)}}
-                        style={{fontFamily:mono,fontSize:9,color:T.ink,background:T.raised,border:`1px solid ${T.line}`,borderRadius:4,padding:"2px 4px",outline:"none",marginLeft:4}}>
+                        style={{fontFamily:mono,fontSize:9,color:T.ink,background:T.raised,border:`1px solid ${T.line}`,borderRadius:4,padding:"2px 4px",outline:"none"}}>
                         {(heatmap.all_expiries||[]).map(ex=>(<option key={ex} value={ex}>{ex.slice(5)}</option>))}
                       </select>
-                      <button onPointerDown={()=>fetchHeatmap(hmExpiry)} style={{fontFamily:mono,fontSize:9,color:T.brand,background:"none",border:`1px solid ${T.brand}`,borderRadius:4,padding:"2px 6px",cursor:"pointer"}}>↻</button>
+                      <button onPointerDown={()=>fetchHeatmap(hmExpiry)} style={{fontFamily:mono,fontSize:10,color:T.brand,background:"none",border:`1px solid ${T.brand}33`,borderRadius:4,padding:"2px 7px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>↻</button>
                     </div>
                   </div>
 
-                  {/* Sub tabs */}
-                  <div style={{display:"flex",borderBottom:`1px solid ${T.line}`,background:T.raised}}>
-                    {["OI Change","OI Walls","IV Skew","Intervals"].map((t,i)=>(
-                      <button key={t} onPointerDown={()=>{setOiTab(i);fetchHeatmap(hmExpiry)}}
-                        style={{flex:1,minHeight:32,border:"none",borderBottom:oiTab===i?`2px solid ${T.brand}`:"2px solid transparent",background:"none",color:oiTab===i?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:10,cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+                  {/* Tab bar */}
+                  <div style={{display:"flex",background:T.raised,borderBottom:`1px solid ${T.line}`}}>
+                    {["OI Change","Pullers/Draggers","OI Walls","Intervals"].map((t,i)=>(
+                      <button key={t} onPointerDown={()=>{setOiTab(i);if(i===1)fetchStocks(symbol)}}
+                        style={{flex:1,minHeight:32,border:"none",borderBottom:oiTab===i?`2px solid ${T.brand}`:"2px solid transparent",
+                          background:"none",color:oiTab===i?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:9,
+                          cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",padding:"0 2px"}}>
                         {t}
                       </button>
                     ))}
                   </div>
 
-                  {/* OI Change Tab */}
-                  {(oiTab===0)&&(
-                    <div style={{padding:"8px 0"}}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"4px 10px",marginBottom:4}}>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.sell,fontWeight:700,textAlign:"right",paddingRight:8}}>CE CHANGE</div>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.subtle,textAlign:"center"}}>STRIKE</div>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.buy,fontWeight:700,paddingLeft:8}}>PE CHANGE</div>
-                      </div>
-                      {(heatmap.heatmap||[]).map(row=>{
-                        const maxChg = Math.max(...(heatmap.heatmap||[]).map(r=>Math.max(Math.abs(r.ce_chg),Math.abs(r.pe_chg),1)))
-                        const cePct = Math.min(100,(Math.abs(row.ce_chg)/maxChg)*100)
-                        const pePct = Math.min(100,(Math.abs(row.pe_chg)/maxChg)*100)
-                        const ceColor = row.ce_chg>0?T.sell+"AA":"#2E7D3266"
-                        const peColor = row.pe_chg>0?T.buy+"AA":"#C6282866"
-                        return(
-                          <div key={row.strike} style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"5px 10px",borderBottom:`1px solid ${T.line}22`,background:row.is_atm?T.brand+"08":"transparent",alignItems:"center"}}>
-                            <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6}}>
-                              <span style={{fontFamily:mono,fontSize:9,fontWeight:row.ce_chg!==0?700:400,color:row.ce_chg>0?T.sell:row.ce_chg<0?"#2E7D32":T.subtle,minWidth:36,textAlign:"right"}}>{row.ce_chg!==0?fmtChg(row.ce_chg):"—"}</span>
-                              <div style={{width:Math.max(2,cePct*0.6),height:row.is_atm?8:5,background:ceColor,borderRadius:"2px 0 0 2px"}}/>
-                            </div>
-                            <div style={{textAlign:"center",fontFamily:mono,fontSize:row.is_atm?11:9,fontWeight:row.is_atm?700:400,color:row.is_atm?T.brand:T.body,background:row.is_atm?T.brand+"15":"transparent",borderRadius:4,padding:"1px 0"}}>{row.strike}</div>
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <div style={{width:Math.max(2,pePct*0.6),height:row.is_atm?8:5,background:peColor,borderRadius:"0 2px 2px 0"}}/>
-                              <span style={{fontFamily:mono,fontSize:9,fontWeight:row.pe_chg!==0?700:400,color:row.pe_chg>0?T.buy:row.pe_chg<0?T.sell:T.subtle,minWidth:36}}>{row.pe_chg!==0?fmtChg(row.pe_chg):"—"}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"8px 10px",borderTop:`1px solid ${T.line}`,marginTop:4}}>
-                        <div style={{textAlign:"right",paddingRight:8}}>
-                          <div style={{fontFamily:mono,fontSize:8,color:T.subtle}}>Total CE Chg</div>
-                          <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:heatmap.total_ce_chg>0?T.sell:"#2E7D32"}}>{fmtChg(heatmap.total_ce_chg||0)}</div>
-                        </div>
-                        <div/>
-                        <div style={{paddingLeft:8}}>
-                          <div style={{fontFamily:mono,fontSize:8,color:T.subtle}}>Total PE Chg</div>
-                          <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:heatmap.total_pe_chg>0?T.buy:T.sell}}>{fmtChg(heatmap.total_pe_chg||0)}</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* OI Walls Tab */}
-                  {oiTab===1&&(
-                    <div style={{padding:"8px 0"}}>
-                      <div style={{display:"flex",gap:8,padding:"6px 10px",marginBottom:4}}>
-                        <div style={{flex:1,padding:"6px 8px",background:T.sell+"11",borderRadius:6,border:`1px solid ${T.sell}33`}}>
-                          <div style={{fontFamily:mono,fontSize:7,color:T.sell,letterSpacing:"1px",marginBottom:3}}>CE WALLS (RESISTANCE)</div>
-                          {(heatmap.ce_walls||[]).map((s,i)=>(<div key={s} style={{fontFamily:mono,fontSize:11,fontWeight:700,color:T.sell}}>{i===0?"🔴":i===1?"🟠":"🟡"} {s}</div>))}
-                        </div>
-                        <div style={{flex:1,padding:"6px 8px",background:T.buy+"11",borderRadius:6,border:`1px solid ${T.buy}33`}}>
-                          <div style={{fontFamily:mono,fontSize:7,color:T.buy,letterSpacing:"1px",marginBottom:3}}>PE WALLS (SUPPORT)</div>
-                          {(heatmap.pe_walls||[]).map((s,i)=>(<div key={s} style={{fontFamily:mono,fontSize:11,fontWeight:700,color:T.buy}}>{i===0?"🟢":i===1?"🟡":"🟠"} {s}</div>))}
-                        </div>
-                      </div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"4px 10px",marginBottom:4}}>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.sell,fontWeight:700,textAlign:"right",paddingRight:8}}>CE OI</div>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.subtle,textAlign:"center"}}>STRIKE</div>
-                        <div style={{fontFamily:mono,fontSize:8,color:T.buy,fontWeight:700,paddingLeft:8}}>PE OI</div>
-                      </div>
-                      {(heatmap.heatmap||[]).map(row=>{
-                        const maxOi = Math.max(...(heatmap.heatmap||[]).map(r=>Math.max(r.ce_oi,r.pe_oi)))
-                        const cePct = Math.min(100,(row.ce_oi/maxOi)*100)
-                        const pePct = Math.min(100,(row.pe_oi/maxOi)*100)
-                        const isCeWall = (heatmap.ce_walls||[]).includes(row.strike)
-                        const isPeWall = (heatmap.pe_walls||[]).includes(row.strike)
-                        return(
-                          <div key={row.strike} style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"5px 10px",borderBottom:`1px solid ${T.line}22`,background:row.is_atm?T.brand+"08":isCeWall?T.sell+"08":isPeWall?T.buy+"08":"transparent",alignItems:"center"}}>
-                            <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:6}}>
-                              <span style={{fontFamily:mono,fontSize:9,color:T.subtle,minWidth:32,textAlign:"right"}}>{fmtOi(row.ce_oi)}</span>
-                              <div style={{width:Math.max(2,cePct*0.6),height:row.is_atm?8:isCeWall?7:5,background:isCeWall?T.sell:T.sell+"66",borderRadius:"2px 0 0 2px"}}/>
-                            </div>
-                            <div style={{textAlign:"center",fontFamily:mono,fontSize:row.is_atm?11:9,fontWeight:row.is_atm?700:400,color:row.is_atm?T.brand:T.body}}>{row.strike}</div>
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <div style={{width:Math.max(2,pePct*0.6),height:row.is_atm?8:isPeWall?7:5,background:isPeWall?T.buy:T.buy+"66",borderRadius:"0 2px 2px 0"}}/>
-                              <span style={{fontFamily:mono,fontSize:9,color:T.subtle,minWidth:32}}>{fmtOi(row.pe_oi)}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-
-                  {/* IV Skew Tab */}
-                  {oiTab===2&&(
-                    <div style={{padding:"8px 0"}}>
-                      <div style={{padding:"6px 10px",marginBottom:4,display:"flex",gap:12,fontFamily:mono,fontSize:9,color:T.subtle}}>
-                        <span style={{color:T.sell}}>■ CE IV</span>
-                        <span style={{color:T.buy}}>■ PE IV</span>
-                        <span style={{marginLeft:"auto"}}>Higher IV = expensive side</span>
-                      </div>
-                      {(heatmap.heatmap||[]).map(row=>{
-                        const maxIv = Math.max(...(heatmap.heatmap||[]).map(r=>Math.max(r.ce_iv,r.pe_iv,1)))
-                        const ceIvPct = Math.min(100,(row.ce_iv/maxIv)*100)
-                        const peIvPct = Math.min(100,(row.pe_iv/maxIv)*100)
-                        const skewColor = row.ce_iv>row.pe_iv?T.sell:row.pe_iv>row.ce_iv?T.buy:T.subtle
-                        return(
-                          <div key={row.strike} style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr",padding:"5px 10px",borderBottom:`1px solid ${T.line}22`,background:row.is_atm?T.brand+"08":"transparent",alignItems:"center"}}>
-                            <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:4}}>
-                              <span style={{fontFamily:mono,fontSize:9,color:row.ce_iv>0?T.sell:T.subtle,minWidth:28,textAlign:"right"}}>{row.ce_iv||"—"}</span>
-                              <div style={{width:Math.max(row.ce_iv?2:0,ceIvPct*0.5),height:5,background:T.sell+"88",borderRadius:"2px 0 0 2px"}}/>
-                            </div>
-                            <div style={{textAlign:"center",fontFamily:mono,fontSize:row.is_atm?11:9,fontWeight:row.is_atm?700:400,color:row.is_atm?T.brand:T.body}}>{row.strike}</div>
-                            <div style={{display:"flex",alignItems:"center",gap:4}}>
-                              <div style={{width:Math.max(row.pe_iv?2:0,peIvPct*0.5),height:5,background:T.buy+"88",borderRadius:"0 2px 2px 0"}}/>
-                              <span style={{fontFamily:mono,fontSize:9,color:row.pe_iv>0?T.buy:T.subtle,minWidth:28}}>{row.pe_iv||"—"}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-
-                  {/* Intervals Tab */}
-                  {oiTab===3&&(
-                    <div style={{padding:"8px 0"}}>
-                      <div style={{display:"grid",gridTemplateColumns:"60px 1fr 80px 80px",padding:"4px 10px",marginBottom:4}}>
-                        {["TIME","BIAS","CE ΔOI","PE ΔOI"].map(h=>(
-                          <div key={h} style={{fontFamily:mono,fontSize:8,color:T.subtle,fontWeight:600}}>{h}</div>
+                  {/* ── TAB 0: OI Change — color heatmap table ── */}
+                  {oiTab===0&&(()=>{
+                    const rows = heatmap.heatmap||[]
+                    const maxChg = Math.max(...rows.map(r=>Math.max(Math.abs(r.ce_chg||0),Math.abs(r.pe_chg||0))),1)
+                    const fmtL = v=>{const a=Math.abs(v);return(v>=0?"+":"-")+(a>=100000?(a/100000).toFixed(1)+"L":a>=1000?(a/1000).toFixed(0)+"K":a)}
+                    const cellBg = (v,side)=>{
+                      if(!v) return "transparent"
+                      const intensity = Math.min(1, Math.abs(v)/maxChg)
+                      if(side==="ce") return v>0?`rgba(198,40,40,${0.1+intensity*0.5})`:`rgba(46,125,50,${0.1+intensity*0.4})`
+                      else return v>0?`rgba(46,125,50,${0.1+intensity*0.5})`:`rgba(198,40,40,${0.1+intensity*0.4})`
+                    }
+                    return(
+                    <div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 56px 56px 56px 1fr",padding:"5px 8px",background:T.raised,borderBottom:`1px solid ${T.line}`}}>
+                        {["CE OI Δ","CE LTP","STRIKE","PE LTP","PE OI Δ"].map(h=>(
+                          <div key={h} style={{fontFamily:mono,fontSize:7,color:T.subtle,fontWeight:700,textAlign:"center"}}>{h}</div>
                         ))}
                       </div>
-                      {(heatmap.intervals||[]).length===0
-                        ?<div style={{textAlign:"center",padding:"24px",color:T.subtle,fontSize:12}}>Intervals build during market hours</div>
-                        :(heatmap.intervals||[]).map((iv,i)=>(
-                          <div key={i} style={{display:"grid",gridTemplateColumns:"60px 1fr 80px 80px",padding:"7px 10px",borderBottom:`1px solid ${T.line}22`,alignItems:"center",background:i===0?T.brand+"06":"transparent"}}>
-                            <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>{iv.time}</div>
-                            <div>
-                              <span style={{display:"inline-block",padding:"2px 8px",borderRadius:10,fontFamily:mono,fontSize:9,fontWeight:700,background:biasColor(iv.bias)+"22",color:biasColor(iv.bias)}}>
-                                {iv.bias==="BULLISH"?"▲":iv.bias==="BEARISH"?"▼":iv.bias==="NEUTRAL"?"—":"◆"} {iv.bias}
-                              </span>
-                            </div>
-                            <div style={{fontFamily:mono,fontSize:9,fontWeight:600,color:iv.ce_chg>0?T.sell:"#2E7D32"}}>{fmtChg(iv.ce_chg)}</div>
-                            <div style={{fontFamily:mono,fontSize:9,fontWeight:600,color:iv.pe_chg>0?T.buy:T.sell}}>{fmtChg(iv.pe_chg)}</div>
+                      {rows.map(row=>(
+                        <div key={row.strike} style={{display:"grid",gridTemplateColumns:"1fr 56px 56px 56px 1fr",
+                          borderBottom:`1px solid ${T.line}22`,
+                          background:row.is_atm?T.brand+"0A":"transparent"}}>
+                          <div style={{background:cellBg(row.ce_chg,"ce"),padding:"6px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{fontFamily:mono,fontSize:9,fontWeight:row.ce_chg?700:400,
+                              color:row.ce_chg>0?T.sell:row.ce_chg<0?T.buy:T.subtle}}>
+                              {row.ce_chg?fmtL(row.ce_chg):"—"}
+                            </span>
                           </div>
-                        ))
+                          <div style={{padding:"6px 2px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{fontFamily:mono,fontSize:9,color:T.body}}>{row.ce_ltp||"—"}</span>
+                          </div>
+                          <div style={{padding:"6px 2px",display:"flex",alignItems:"center",justifyContent:"center",
+                            background:row.is_atm?T.brand+"20":"transparent"}}>
+                            <span style={{fontFamily:mono,fontSize:row.is_atm?11:9,fontWeight:row.is_atm?700:500,
+                              color:row.is_atm?T.brand:T.body}}>{row.strike}</span>
+                          </div>
+                          <div style={{padding:"6px 2px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{fontFamily:mono,fontSize:9,color:T.body}}>{row.pe_ltp||"—"}</span>
+                          </div>
+                          <div style={{background:cellBg(row.pe_chg,"pe"),padding:"6px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{fontFamily:mono,fontSize:9,fontWeight:row.pe_chg?700:400,
+                              color:row.pe_chg>0?T.buy:row.pe_chg<0?T.sell:T.subtle}}>
+                              {row.pe_chg?fmtL(row.pe_chg):"—"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 56px 56px 56px 1fr",padding:"7px 8px",background:T.raised,borderTop:`1px solid ${T.line}`}}>
+                        <div style={{textAlign:"center",fontFamily:mono,fontSize:9,fontWeight:700,color:heatmap.total_ce_chg>0?T.sell:T.buy}}>
+                          {heatmap.total_ce_chg?(heatmap.total_ce_chg>0?"+":"")+Math.round(heatmap.total_ce_chg/1000)+"K":"—"}
+                        </div>
+                        <div/><div style={{textAlign:"center",fontFamily:mono,fontSize:8,color:T.subtle}}>TOTAL</div><div/>
+                        <div style={{textAlign:"center",fontFamily:mono,fontSize:9,fontWeight:700,color:heatmap.total_pe_chg>0?T.buy:T.sell}}>
+                          {heatmap.total_pe_chg?(heatmap.total_pe_chg>0?"+":"")+Math.round(heatmap.total_pe_chg/1000)+"K":"—"}
+                        </div>
+                      </div>
+                    </div>
+                  )})()}
+
+                  {/* ── TAB 1: OI Walls ── */}
+                  {oiTab===2&&(()=>{
+                    const rows = heatmap.heatmap||[]
+                    const maxOi = Math.max(...rows.map(r=>Math.max(r.ce_oi||0,r.pe_oi||0)),1)
+                    const fmtOi = v=>v>=10000000?(v/10000000).toFixed(1)+"Cr":v>=100000?(v/100000).toFixed(1)+"L":v>=1000?(v/1000).toFixed(0)+"K":v
+                    const ceWalls = heatmap.ce_walls||[]
+                    const peWalls = heatmap.pe_walls||[]
+                    return(
+                    <div>
+                      <div style={{display:"flex",gap:8,padding:"8px"}}>
+                        <div style={{flex:1,padding:"8px",background:T.sell+"0F",borderRadius:8,border:`1px solid ${T.sell}33`}}>
+                          <div style={{fontFamily:mono,fontSize:7,color:T.sell,letterSpacing:"1px",marginBottom:5}}>🔴 CE WALLS (RESISTANCE)</div>
+                          {ceWalls.map((s,i)=>(<div key={s} style={{fontFamily:mono,fontSize:12,fontWeight:700,color:T.sell,marginBottom:2}}>{["①","②","③"][i]} {s}</div>))}
+                        </div>
+                        <div style={{flex:1,padding:"8px",background:T.buy+"0F",borderRadius:8,border:`1px solid ${T.buy}33`}}>
+                          <div style={{fontFamily:mono,fontSize:7,color:T.buy,letterSpacing:"1px",marginBottom:5}}>🟢 PE WALLS (SUPPORT)</div>
+                          {peWalls.map((s,i)=>(<div key={s} style={{fontFamily:mono,fontSize:12,fontWeight:700,color:T.buy,marginBottom:2}}>{["①","②","③"][i]} {s}</div>))}
+                        </div>
+                      </div>
+                      <div style={{padding:"0 8px 8px"}}>
+                        {rows.map(row=>{
+                          const cePct = (row.ce_oi/maxOi)*100
+                          const pePct = (row.pe_oi/maxOi)*100
+                          const isCeWall = ceWalls.includes(row.strike)
+                          const isPeWall = peWalls.includes(row.strike)
+                          return(
+                          <div key={row.strike} style={{display:"grid",gridTemplateColumns:"1fr 56px 1fr",gap:4,marginBottom:3,alignItems:"center",
+                            background:row.is_atm?T.brand+"0A":isCeWall?T.sell+"08":isPeWall?T.buy+"08":"transparent",
+                            borderRadius:4,padding:"3px 4px"}}>
+                            <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:4}}>
+                              <span style={{fontFamily:mono,fontSize:8,color:isCeWall?T.sell:T.subtle,fontWeight:isCeWall?700:400,minWidth:28,textAlign:"right"}}>{fmtOi(row.ce_oi)}</span>
+                              <div style={{height:isCeWall?10:6,borderRadius:"3px 0 0 3px",
+                                background:isCeWall?T.sell:T.sell+"55",
+                                width:Math.max(2,cePct*0.7)}}/>
+                            </div>
+                            <div style={{textAlign:"center",fontFamily:mono,fontSize:row.is_atm?11:9,fontWeight:row.is_atm?700:400,
+                              color:row.is_atm?T.brand:T.body}}>{row.strike}</div>
+                            <div style={{display:"flex",alignItems:"center",gap:4}}>
+                              <div style={{height:isPeWall?10:6,borderRadius:"0 3px 3px 0",
+                                background:isPeWall?T.buy:T.buy+"55",
+                                width:Math.max(2,pePct*0.7)}}/>
+                              <span style={{fontFamily:mono,fontSize:8,color:isPeWall?T.buy:T.subtle,fontWeight:isPeWall?700:400,minWidth:28}}>{fmtOi(row.pe_oi)}</span>
+                            </div>
+                          </div>
+                        )})}
+                      </div>
+                    </div>
+                  )})()}
+
+                  {/* ── TAB 2: IV Skew ── */}
+
+                  {/* ── TAB 3: Intervals ── */}
+                  {oiTab===3&&(
+                    <div style={{padding:"8px 0"}}>
+                      <div style={{display:"grid",gridTemplateColumns:"52px 1fr 72px 72px",padding:"4px 12px",background:T.raised,borderBottom:`1px solid ${T.line}`}}>
+                        {["TIME","BIAS","CE ΔOI","PE ΔOI"].map(h=>(<div key={h} style={{fontFamily:mono,fontSize:7,color:T.subtle,fontWeight:700}}>{h}</div>))}
+                      </div>
+                      {(heatmap.intervals||[]).length===0
+                        ?<div style={{textAlign:"center",padding:"28px",color:T.subtle,fontSize:12,fontFamily:inter}}>Interval data builds during market hours</div>
+                        :(heatmap.intervals||[]).map((iv,i)=>{
+                          const bc = iv.bias==="BULLISH"?T.buy:iv.bias==="BEARISH"?T.sell:T.subtle
+                          const fmtK = v=>(v>=0?"+":"-")+Math.round(Math.abs(v)/1000)+"K"
+                          return(
+                          <div key={i} style={{display:"grid",gridTemplateColumns:"52px 1fr 72px 72px",padding:"8px 12px",
+                            borderBottom:`1px solid ${T.line}22`,background:i===0?T.brand+"06":"transparent",alignItems:"center"}}>
+                            <div style={{fontFamily:mono,fontSize:10,color:T.subtle}}>{iv.time}</div>
+                            <div><span style={{display:"inline-block",padding:"2px 8px",borderRadius:8,fontFamily:mono,fontSize:9,fontWeight:700,
+                              background:bc+"22",color:bc,border:`1px solid ${bc}44`}}>
+                              {iv.bias==="BULLISH"?"▲":iv.bias==="BEARISH"?"▼":"—"} {iv.bias}
+                            </span></div>
+                            <div style={{fontFamily:mono,fontSize:9,fontWeight:600,color:iv.ce_chg>0?T.sell:T.buy}}>{fmtK(iv.ce_chg)}</div>
+                            <div style={{fontFamily:mono,fontSize:9,fontWeight:600,color:iv.pe_chg>0?T.buy:T.sell}}>{fmtK(iv.pe_chg)}</div>
+                          </div>
+                        )})
+                      }
+                    </div>
+                  )}
+
+                  {/* ── TAB 4: Stock Heatmap ── */}
+                  {oiTab===1&&(
+                    <div style={{padding:"8px"}}>
+                      {!stocks
+                        ?<div style={{textAlign:"center",padding:"28px",color:T.subtle,fontSize:12}}>Loading...</div>
+                        :<div>
+                          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginBottom:8,letterSpacing:"1px"}}>
+                            {symbol} TOP CONSTITUENTS · % CHANGE TODAY
+                          </div>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                            {(stocks.stocks||[]).map(s=>{
+                              const chg = s.chg_pct||0
+                              const bg = chg>1.5?T.buy+"33":chg>0.5?T.buy+"1A":chg>0?T.buy+"0D":
+                                         chg<-1.5?T.sell+"33":chg<-0.5?T.sell+"1A":T.sell+"0D"
+                              const col = chg>0?T.buy:chg<0?T.sell:T.subtle
+                              return(
+                              <div key={s.name} style={{padding:"8px 10px",borderRadius:8,background:bg,
+                                border:`1px solid ${chg>0?T.buy+"33":T.sell+"33"}`}}>
+                                <div style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.ink,marginBottom:2}}>{s.name}</div>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                                  <div style={{fontFamily:mono,fontSize:11,color:T.body}}>₹{s.ltp?.toLocaleString('en-IN')}</div>
+                                  <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:col}}>
+                                    {chg>=0?"+":""}{chg.toFixed(2)}%
+                                  </div>
+                                </div>
+                                <div style={{fontFamily:mono,fontSize:7,color:T.subtle,marginTop:2}}>{s.weight}% weight</div>
+                              </div>
+                            )})}
+                          </div>
+                        </div>
                       }
                     </div>
                   )}
 
                   {/* Footer */}
-                  <div style={{padding:"6px 10px",borderTop:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div style={{fontFamily:mono,fontSize:8,color:T.subtle}}>Updated {heatmap.last_updated||"—"}</div>
-                    <div style={{display:"flex",gap:12,fontFamily:mono,fontSize:9}}>
-                      <span style={{color:T.sell}}>CE {fmtOi(heatmap.total_ce_oi||0)}</span>
-                      <span style={{color:T.subtle}}>|</span>
-                      <span style={{color:T.buy}}>PE {fmtOi(heatmap.total_pe_oi||0)}</span>
+                  <div style={{padding:"6px 12px",borderTop:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",background:T.raised}}>
+                    <span style={{fontFamily:mono,fontSize:8,color:T.subtle}}>Updated {heatmap.last_updated||"—"}</span>
+                    <div style={{display:"flex",gap:8,fontFamily:mono,fontSize:8}}>
+                      <span style={{color:T.sell}}>CE {heatmap.total_ce_oi>=100000?(heatmap.total_ce_oi/100000).toFixed(1)+"L":"—"}</span>
+                      <span style={{color:T.subtle}}>·</span>
+                      <span style={{color:T.buy}}>PE {heatmap.total_pe_oi>=100000?(heatmap.total_pe_oi/100000).toFixed(1)+"L":"—"}</span>
                     </div>
                   </div>
 
                 </div>
-                )
-              })()}
+              )}
             </div>
           )}
 
