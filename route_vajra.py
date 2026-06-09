@@ -555,6 +555,12 @@ def _dhan_headers():
     tok, cid = _dhan_creds()
     return {'access-token': tok, 'client-id': cid, 'Content-Type': 'application/json'}
 
+# ── OI CACHE for change tracking ──────────────────────────────────────────────
+_oi_baseline = {}   # strike -> {ce_oi, pe_oi} at market open or first fetch
+_oi_intervals = []  # list of {time, strikes: [{strike, ce_oi_chg, pe_oi_chg, bias}]}
+_oi_last_snap = {}  # strike -> {ce_oi, pe_oi} at last fetch
+_oi_last_time = None
+
 # ── TREND ENGINE ──────────────────────────────────────────────────────────────
 def _compute_supertrend(highs, lows, closes, period=10, multiplier=3.0):
     import math
@@ -650,29 +656,20 @@ async def get_trend():
 
 @router.get('/heatmap')
 async def get_heatmap(expiry: str = ''):
+    global _oi_baseline, _oi_last_snap, _oi_last_time, _oi_intervals
     try:
         tok, cid = _dhan_creds()
         if not tok:
             return {'error': 'No Dhan token'}
-        # Get expiry list if not provided
         async with httpx.AsyncClient(timeout=10) as client:
+            er = await client.post(
+                'https://api.dhan.co/v2/optionchain/expirylist',
+                json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I'},
+                headers=_dhan_headers()
+            )
+            all_expiries = er.json().get('data', [])[:4]
             if not expiry:
-                er = await client.post(
-                    'https://api.dhan.co/v2/optionchain/expirylist',
-                    json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I'},
-                    headers=_dhan_headers()
-                )
-                expiries = er.json().get('data', [])
-                expiry = expiries[0] if expiries else ''
-                all_expiries = expiries[:4]  # next 4 expiries
-            else:
-                er = await client.post(
-                    'https://api.dhan.co/v2/optionchain/expirylist',
-                    json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I'},
-                    headers=_dhan_headers()
-                )
-                all_expiries = er.json().get('data', [])[:4]
-            # Fetch option chain
+                expiry = all_expiries[0] if all_expiries else ''
             cr = await client.post(
                 'https://api.dhan.co/v2/optionchain',
                 json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I', 'Expiry': expiry},
@@ -683,42 +680,105 @@ async def get_heatmap(expiry: str = ''):
         chain_data = cr.json().get('data', {})
         spot = chain_data.get('last_price', 0)
         oc = chain_data.get('oc', {})
-        # Build strikes array sorted, ATM ± 10 strikes
         strikes = sorted([float(k) for k in oc.keys()])
         atm = min(strikes, key=lambda x: abs(x - spot)) if strikes else 0
         atm_idx = strikes.index(atm) if atm in strikes else len(strikes)//2
         selected = strikes[max(0, atm_idx-8):atm_idx+9]
+
+        now_ist = datetime.now(IST)
+        now_str = now_ist.strftime('%H:%M')
         heatmap = []
         total_ce_oi = total_pe_oi = 0
+        total_ce_chg = total_pe_chg = 0
+        interval_strikes = []
+
         for s in selected:
-            sk = str(s) if str(s) in oc else f'{s:.6f}'
-            # Try both formats
-            entry = oc.get(sk) or oc.get(str(int(s))) or {}
+            sk = str(int(s))
+            entry = oc.get(sk) or oc.get(str(s)) or {}
             ce = entry.get('ce', {})
             pe = entry.get('pe', {})
-            ce_oi = ce.get('oi', 0)
-            pe_oi = pe.get('oi', 0)
+            ce_oi  = ce.get('oi', 0)
+            pe_oi  = pe.get('oi', 0)
             ce_ltp = ce.get('last_price', 0)
             pe_ltp = pe.get('last_price', 0)
             ce_iv  = round(ce.get('implied_volatility', 0), 1)
             pe_iv  = round(pe.get('implied_volatility', 0), 1)
             total_ce_oi += ce_oi
             total_pe_oi += pe_oi
+
+            # OI change vs baseline
+            base = _oi_baseline.get(sk, {})
+            ce_chg = ce_oi - base.get('ce_oi', ce_oi)
+            pe_chg = pe_oi - base.get('pe_oi', pe_oi)
+            total_ce_chg += ce_chg
+            total_pe_chg += pe_chg
+
+            # OI change vs last snap (interval)
+            last = _oi_last_snap.get(sk, {})
+            ce_int_chg = ce_oi - last.get('ce_oi', ce_oi)
+            pe_int_chg = pe_oi - last.get('pe_oi', pe_oi)
+
+            # Strike bias
+            if pe_chg > 0 and ce_chg <= 0: bias = 'BULLISH'
+            elif ce_chg > 0 and pe_chg <= 0: bias = 'BEARISH'
+            elif pe_chg > 0 and ce_chg > 0: bias = 'NEUTRAL'
+            else: bias = 'UNWIND'
+
             heatmap.append({
-                'strike': int(s),
+                'strike': int(s), 'is_atm': s == atm,
                 'ce_oi': ce_oi, 'pe_oi': pe_oi,
+                'ce_chg': ce_chg, 'pe_chg': pe_chg,
+                'ce_int_chg': ce_int_chg, 'pe_int_chg': pe_int_chg,
                 'ce_ltp': ce_ltp, 'pe_ltp': pe_ltp,
                 'ce_iv': ce_iv, 'pe_iv': pe_iv,
-                'is_atm': s == atm
+                'bias': bias
             })
+            interval_strikes.append({'strike': int(s), 'ce_chg': ce_int_chg, 'pe_chg': pe_int_chg})
+            # Update last snap
+            _oi_last_snap[sk] = {'ce_oi': ce_oi, 'pe_oi': pe_oi}
+
+        # Set baseline if empty
+        if not _oi_baseline:
+            _oi_baseline = {str(int(s)): {'ce_oi': r['ce_oi'], 'pe_oi': r['pe_oi']} for r, s in zip(heatmap, selected)}
+
+        # Record interval every 3 min
+        if _oi_last_time is None or (now_ist - _oi_last_time).total_seconds() >= 180:
+            _oi_last_time = now_ist
+            total_ce_int = sum(r['ce_int_chg'] for r in heatmap)
+            total_pe_int = sum(r['pe_int_chg'] for r in heatmap)
+            if total_pe_int > 0 and total_ce_int <= 0: int_bias = 'BULLISH'
+            elif total_ce_int > 0 and total_pe_int <= 0: int_bias = 'BEARISH'
+            elif abs(total_ce_int) < 50000 and abs(total_pe_int) < 50000: int_bias = 'NEUTRAL'
+            else: int_bias = 'MIXED'
+            _oi_intervals.insert(0, {
+                'time': now_str,
+                'bias': int_bias,
+                'ce_chg': total_ce_int,
+                'pe_chg': total_pe_int
+            })
+            _oi_intervals = _oi_intervals[:15]  # keep last 15
+
         pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi else 0
+        # Top CE/PE walls
+        sorted_by_ce = sorted(heatmap, key=lambda x: x['ce_oi'], reverse=True)
+        sorted_by_pe = sorted(heatmap, key=lambda x: x['pe_oi'], reverse=True)
+        ce_walls = [r['strike'] for r in sorted_by_ce[:3]]
+        pe_walls = [r['strike'] for r in sorted_by_pe[:3]]
+
+        # Overall bias
+        if total_pe_chg > 0 and total_ce_chg <= 0: overall_bias = 'BULLISH'
+        elif total_ce_chg > 0 and total_pe_chg <= 0: overall_bias = 'BEARISH'
+        else: overall_bias = 'NEUTRAL'
+
         return {
-            'spot': spot, 'expiry': expiry,
-            'all_expiries': all_expiries,
+            'spot': spot, 'expiry': expiry, 'all_expiries': all_expiries,
             'heatmap': heatmap,
-            'total_ce_oi': total_ce_oi,
-            'total_pe_oi': total_pe_oi,
-            'pcr': pcr
+            'total_ce_oi': total_ce_oi, 'total_pe_oi': total_pe_oi,
+            'total_ce_chg': total_ce_chg, 'total_pe_chg': total_pe_chg,
+            'pcr': pcr, 'overall_bias': overall_bias,
+            'ce_walls': ce_walls, 'pe_walls': pe_walls,
+            'intervals': _oi_intervals,
+            'last_updated': now_str
         }
     except Exception as e:
         return {'error': str(e)}
