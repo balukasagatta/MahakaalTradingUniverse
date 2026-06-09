@@ -555,14 +555,20 @@ def _dhan_headers():
     tok, cid = _dhan_creds()
     return {'access-token': tok, 'client-id': cid, 'Content-Type': 'application/json'}
 
+# ── TREND CACHE — computed once per minute, served to all users ───────────────
+_trend_cache = {}
+_trend_cache_time = None
+
 # ── OI CACHE for change tracking ──────────────────────────────────────────────
-_oi_baseline = {}   # strike -> {ce_oi, pe_oi} at market open or first fetch
-_oi_intervals = []  # list of {time, strikes: [{strike, ce_oi_chg, pe_oi_chg, bias}]}
-_oi_last_snap = {}  # strike -> {ce_oi, pe_oi} at last fetch
+_oi_baseline = {}
+_oi_intervals = []
+_oi_last_snap = {}
 _oi_last_time = None
+_heatmap_cache = {}
+_heatmap_cache_time = {}  # per expiry
 
 # ── TREND ENGINE ──────────────────────────────────────────────────────────────
-def _compute_supertrend(highs, lows, closes, period=10, multiplier=3.0):
+def _compute_supertrend(highs, lows, closes, period=10, multiplier=2.0):
     import math
     n = len(closes)
     if n < period + 1:
@@ -611,12 +617,18 @@ def _compute_supertrend(highs, lows, closes, period=10, multiplier=3.0):
     if len(closes) >= 5:
         chg = [closes[i]-closes[i-1] for i in range(len(closes)-5, len(closes))]
         flips = sum(1 for i in range(1,len(chg)) if chg[i]*chg[i-1]<0)
-        if flips >= 3:
+        if flips >= 4:
             bias = 'CHOPPY'; confidence = max(30, confidence-20)
     return bias, confidence, round(atr, 2)
 
 @router.get('/trend')
 async def get_trend():
+    global _trend_cache, _trend_cache_time
+    # Serve cached result if < 60 seconds old
+    if _trend_cache and _trend_cache_time:
+        age = (datetime.now(IST) - _trend_cache_time).total_seconds()
+        if age < 60:
+            return _trend_cache
     try:
         tok, cid = _dhan_creds()
         if not tok:
@@ -626,7 +638,7 @@ async def get_trend():
         to_dt   = now_ist.strftime('%Y-%m-%d %H:%M:%S')
         # Sensex security_id=13, IDX_I segment
         payload = {
-            'securityId': '13',
+            'securityId': '51',
             'exchangeSegment': 'IDX_I',
             'instrument': 'INDEX',
             'interval': '1',
@@ -646,6 +658,7 @@ async def get_trend():
         highs  = data.get('high',[])
         lows   = data.get('low',[])
         closes = data.get('close',[])
+        opens  = data.get('open',[])
         if len(closes) < 15:
             # Fallback: fetch full trading day (9:15-15:30)
             today = now_ist.strftime('%Y-%m-%d')
@@ -662,17 +675,54 @@ async def get_trend():
                 highs  = data2.get('high', highs)
                 lows   = data2.get('low', lows)
                 closes = data2.get('close', closes)
+                opens  = data2.get('open', opens)
             if len(closes) < 15:
                 return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'MARKET_CLOSED','candles':len(closes)}
         bias, confidence, atr = _compute_supertrend(highs, lows, closes)
         regime = 'LOW' if atr < 10 else 'HIGH' if atr > 30 else 'NORMAL'
-        return {'bias': bias, 'confidence': confidence, 'atr': atr, 'regime': regime, 'candles': len(closes)}
+
+        # Get prev close from daily API
+        day_chg = 0; day_chg_pct = 0
+        try:
+            from datetime import timedelta as _td
+            prev_date = (now_ist - _td(days=5)).strftime('%Y-%m-%d')
+            today_str = now_ist.strftime('%Y-%m-%d')
+            async with httpx.AsyncClient(timeout=5) as dc:
+                dr = await dc.post('https://api.dhan.co/v2/charts/historical', json={
+                    'securityId': '51', 'exchangeSegment': 'IDX_I',
+                    'instrument': 'INDEX', 'expiryCode': 0, 'oi': False,
+                    'fromDate': prev_date, 'toDate': today_str
+                }, headers=_dhan_headers())
+            if dr.status_code == 200:
+                dcloses = dr.json().get('close', [])
+                if dcloses and closes:
+                    prev_close = dcloses[-1]
+                    day_chg = closes[-1] - prev_close
+                    day_chg_pct = round((day_chg / prev_close) * 100, 2) if prev_close else 0
+                    if day_chg_pct >= 0.3 and bias in ('BEARISH','CHOPPY'):
+                        bias = 'BULLISH'; confidence = max(confidence, 65)
+                    elif day_chg_pct <= -0.3 and bias in ('BULLISH','CHOPPY'):
+                        bias = 'BEARISH'; confidence = max(confidence, 65)
+        except Exception:
+            pass
+
+        _trend_cache = {'bias': bias, 'confidence': confidence, 'atr': round(atr,2),
+                'regime': regime, 'candles': len(closes),
+                'day_chg': round(day_chg,2), 'day_chg_pct': round(day_chg_pct,2)}
+        _trend_cache_time = datetime.now(IST)
+        return _trend_cache
     except Exception as e:
         return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'UNKNOWN','error':str(e)}
 
 @router.get('/heatmap')
 async def get_heatmap(expiry: str = ''):
-    global _oi_baseline, _oi_last_snap, _oi_last_time, _oi_intervals
+    global _oi_baseline, _oi_last_snap, _oi_last_time, _oi_intervals, _heatmap_cache, _heatmap_cache_time
+    # Serve cache if < 30 seconds old (option chain changes slowly)
+    cache_key = expiry or 'default'
+    if cache_key in _heatmap_cache and cache_key in _heatmap_cache_time:
+        age = (datetime.now(IST) - _heatmap_cache_time[cache_key]).total_seconds()
+        if age < 30:
+            return _heatmap_cache[cache_key]
     try:
         tok, cid = _dhan_creds()
         if not tok:
@@ -706,40 +756,37 @@ async def get_heatmap(expiry: str = ''):
         heatmap = []
         total_ce_oi = total_pe_oi = 0
         total_ce_chg = total_pe_chg = 0
-        interval_strikes = []
 
         for s in selected:
-            sk = str(int(s))
-            entry = oc.get(sk) or oc.get(str(s)) or {}
+            sk = f'{s:.6f}'
+            entry = oc.get(sk) or oc.get(str(s)) or oc.get(str(int(s))) or {}
             ce = entry.get('ce', {})
             pe = entry.get('pe', {})
-            ce_oi  = ce.get('oi', 0)
-            pe_oi  = pe.get('oi', 0)
-            ce_ltp = ce.get('last_price', 0)
-            pe_ltp = pe.get('last_price', 0)
-            ce_iv  = round(ce.get('implied_volatility', 0), 1)
-            pe_iv  = round(pe.get('implied_volatility', 0), 1)
-            total_ce_oi += ce_oi
-            total_pe_oi += pe_oi
-
-            # OI change vs baseline
-            base = _oi_baseline.get(sk, {})
-            ce_chg = ce_oi - base.get('ce_oi', ce_oi)
-            pe_chg = pe_oi - base.get('pe_oi', pe_oi)
+            ce_oi      = ce.get('oi', 0)
+            pe_oi      = pe.get('oi', 0)
+            ce_prev_oi = ce.get('previous_oi', ce_oi)
+            pe_prev_oi = pe.get('previous_oi', pe_oi)
+            ce_ltp     = ce.get('last_price', 0)
+            pe_ltp     = pe.get('last_price', 0)
+            ce_iv      = round(ce.get('implied_volatility', 0), 2)
+            pe_iv      = round(pe.get('implied_volatility', 0), 2)
+            ce_delta   = round(ce.get('greeks', {}).get('delta', 0), 3)
+            pe_delta   = round(pe.get('greeks', {}).get('delta', 0), 3)
+            ce_chg = ce_oi - ce_prev_oi
+            pe_chg = pe_oi - pe_prev_oi
+            total_ce_oi  += ce_oi
+            total_pe_oi  += pe_oi
             total_ce_chg += ce_chg
             total_pe_chg += pe_chg
-
-            # OI change vs last snap (interval)
-            last = _oi_last_snap.get(sk, {})
+            snap_key = str(int(s))
+            last = _oi_last_snap.get(snap_key, {})
             ce_int_chg = ce_oi - last.get('ce_oi', ce_oi)
             pe_int_chg = pe_oi - last.get('pe_oi', pe_oi)
-
-            # Strike bias
-            if pe_chg > 0 and ce_chg <= 0: bias = 'BULLISH'
-            elif ce_chg > 0 and pe_chg <= 0: bias = 'BEARISH'
-            elif pe_chg > 0 and ce_chg > 0: bias = 'NEUTRAL'
-            else: bias = 'UNWIND'
-
+            _oi_last_snap[snap_key] = {'ce_oi': ce_oi, 'pe_oi': pe_oi}
+            if pe_chg > 0 and ce_chg <= 0:   strike_bias = 'BULLISH'
+            elif ce_chg > 0 and pe_chg <= 0: strike_bias = 'BEARISH'
+            elif pe_chg > 0 and ce_chg > 0:  strike_bias = 'NEUTRAL'
+            else:                              strike_bias = 'UNWIND'
             heatmap.append({
                 'strike': int(s), 'is_atm': s == atm,
                 'ce_oi': ce_oi, 'pe_oi': pe_oi,
@@ -747,15 +794,9 @@ async def get_heatmap(expiry: str = ''):
                 'ce_int_chg': ce_int_chg, 'pe_int_chg': pe_int_chg,
                 'ce_ltp': ce_ltp, 'pe_ltp': pe_ltp,
                 'ce_iv': ce_iv, 'pe_iv': pe_iv,
-                'bias': bias
+                'ce_delta': ce_delta, 'pe_delta': pe_delta,
+                'bias': strike_bias
             })
-            interval_strikes.append({'strike': int(s), 'ce_chg': ce_int_chg, 'pe_chg': pe_int_chg})
-            # Update last snap
-            _oi_last_snap[sk] = {'ce_oi': ce_oi, 'pe_oi': pe_oi}
-
-        # Set baseline if empty
-        if not _oi_baseline:
-            _oi_baseline = {str(int(s)): {'ce_oi': r['ce_oi'], 'pe_oi': r['pe_oi']} for r, s in zip(heatmap, selected)}
 
         # Record interval every 3 min
         if _oi_last_time is None or (now_ist - _oi_last_time).total_seconds() >= 180:
@@ -786,7 +827,7 @@ async def get_heatmap(expiry: str = ''):
         elif total_ce_chg > 0 and total_pe_chg <= 0: overall_bias = 'BEARISH'
         else: overall_bias = 'NEUTRAL'
 
-        return {
+        result = {
             'spot': spot, 'expiry': expiry, 'all_expiries': all_expiries,
             'heatmap': heatmap,
             'total_ce_oi': total_ce_oi, 'total_pe_oi': total_pe_oi,
@@ -796,5 +837,8 @@ async def get_heatmap(expiry: str = ''):
             'intervals': _oi_intervals,
             'last_updated': now_str
         }
+        _heatmap_cache[cache_key] = result
+        _heatmap_cache_time[cache_key] = datetime.now(IST)
+        return result
     except Exception as e:
         return {'error': str(e)}
