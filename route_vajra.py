@@ -647,7 +647,23 @@ async def get_trend():
         lows   = data.get('low',[])
         closes = data.get('close',[])
         if len(closes) < 15:
-            return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'INSUFFICIENT_DATA'}
+            # Fallback: fetch full trading day (9:15-15:30)
+            today = now_ist.strftime('%Y-%m-%d')
+            from_dt2 = today + ' 09:15:00'
+            to_dt2   = today + ' 15:30:00'
+            payload2 = {**payload, 'fromDate': from_dt2, 'toDate': to_dt2}
+            async with httpx.AsyncClient(timeout=10) as client2:
+                r2 = await client2.post(
+                    'https://api.dhan.co/v2/charts/intraday',
+                    json=payload2, headers=_dhan_headers()
+                )
+            if r2.status_code == 200:
+                data2 = r2.json()
+                highs  = data2.get('high', highs)
+                lows   = data2.get('low', lows)
+                closes = data2.get('close', closes)
+            if len(closes) < 15:
+                return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'MARKET_CLOSED','candles':len(closes)}
         bias, confidence, atr = _compute_supertrend(highs, lows, closes)
         regime = 'LOW' if atr < 10 else 'HIGH' if atr > 30 else 'NORMAL'
         return {'bias': bias, 'confidence': confidence, 'atr': atr, 'regime': regime, 'candles': len(closes)}
