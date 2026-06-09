@@ -1,0 +1,248 @@
+{
+  "SENSEX": [
+    {
+      "symbol": "RELIANCE",
+      "name": "Reliance",
+      "sector": "ENERGY",
+      "weight": 11.92
+    },
+    {
+      "symbol": "HDFCBANK",
+      "name": "HDFC Bank",
+      "sector": "BANKING",
+      "weight": 7.79
+    },
+    {
+      "symbol": "BHARTIARTL",
+      "name": "Bharti Airtel",
+      "sector": "TELECOM",
+      "weight": 7.46
+    },
+    {
+      "symbol": "SBIN",
+      "name": "SBI",
+      "sector": "BANKING",
+      "weight": 6.01
+    },
+    {
+      "symbol": "ICICIBANK",
+      "name": "ICICI Bank",
+      "sector": "BANKING",
+      "weight": 5.98
+    },
+    {
+      "symbol": "TCS",
+      "name": "TCS",
+      "sector": "IT",
+      "weight": 5.21
+    },
+    {
+      "symbol": "BAJFINANCE",
+      "name": "Bajaj Finance",
+      "sector": "FINANCE",
+      "weight": 4.85
+    },
+    {
+      "symbol": "INFY",
+      "name": "Infosys",
+      "sector": "IT",
+      "weight": 4.32
+    },
+    {
+      "symbol": "HINDUNILVR",
+      "name": "HUL",
+      "sector": "FMCG",
+      "weight": 3.91
+    },
+    {
+      "symbol": "KOTAKBANK",
+      "name": "Kotak Bank",
+      "sector": "BANKING",
+      "weight": 3.74
+    },
+    {
+      "symbol": "LT",
+      "name": "L&T",
+      "sector": "INFRA",
+      "weight": 3.52
+    },
+    {
+      "symbol": "AXISBANK",
+      "name": "Axis Bank",
+      "sector": "BANKING",
+      "weight": 3.21
+    },
+    {
+      "symbol": "MARUTI",
+      "name": "Maruti",
+      "sector": "AUTO",
+      "weight": 2.98
+    },
+    {
+      "symbol": "TITAN",
+      "name": "Titan",
+      "sector": "CONSUMER",
+      "weight": 2.71
+    },
+    {
+      "symbol": "SUNPHARMA",
+      "name": "Sun Pharma",
+      "sector": "PHARMA",
+      "weight": 2.54
+    }
+  ],
+  "NIFTY": [
+    {
+      "symbol": "HDFCBANK",
+      "name": "HDFC Bank",
+      "sector": "BANKING",
+      "weight": 12.41
+    },
+    {
+      "symbol": "RELIANCE",
+      "name": "Reliance",
+      "sector": "ENERGY",
+      "weight": 9.12
+    },
+    {
+      "symbol": "ICICIBANK",
+      "name": "ICICI Bank",
+      "sector": "BANKING",
+      "weight": 7.89
+    },
+    {
+      "symbol": "INFY",
+      "name": "Infosys",
+      "sector": "IT",
+      "weight": 6.12
+    },
+    {
+      "symbol": "TCS",
+      "name": "TCS",
+      "sector": "IT",
+      "weight": 5.21
+    },
+    {
+      "symbol": "BHARTIARTL",
+      "name": "Bharti Airtel",
+      "sector": "TELECOM",
+      "weight": 4.98
+    },
+    {
+      "symbol": "BAJFINANCE",
+      "name": "Bajaj Finance",
+      "sector": "FINANCE",
+      "weight": 4.85
+    },
+    {
+      "symbol": "SBIN",
+      "name": "SBI",
+      "sector": "BANKING",
+      "weight": 3.21
+    },
+    {
+      "symbol": "HINDUNILVR",
+      "name": "HUL",
+      "sector": "FMCG",
+      "weight": 2.91
+    },
+    {
+      "symbol": "KOTAKBANK",
+      "name": "Kotak Bank",
+      "sector": "BANKING",
+      "weight": 2.74
+    },
+    {
+      "symbol": "LT",
+      "name": "L&T",
+      "sector": "INFRA",
+      "weight": 2.65
+    },
+    {
+      "symbol": "AXISBANK",
+      "name": "Axis Bank",
+      "sector": "BANKING",
+      "weight": 2.54
+    },
+    {
+      "symbol": "MARUTI",
+      "name": "Maruti",
+      "sector": "AUTO",
+      "weight": 2.41
+    },
+    {
+      "symbol": "TITAN",
+      "name": "Titan",
+      "sector": "CONSUMER",
+      "weight": 2.18
+    },
+    {
+      "symbol": "SUNPHARMA",
+      "name": "Sun Pharma",
+      "sector": "PHARMA",
+      "weight": 2.05
+    }
+  ],
+  "BANKNIFTY": [
+    {
+      "symbol": "HDFCBANK",
+      "name": "HDFC Bank",
+      "sector": "BANKING",
+      "weight": 28.5
+    },
+    {
+      "symbol": "ICICIBANK",
+      "name": "ICICI Bank",
+      "sector": "BANKING",
+      "weight": 22.1
+    },
+    {
+      "symbol": "KOTAKBANK",
+      "name": "Kotak Bank",
+      "sector": "BANKING",
+      "weight": 12.8
+    },
+    {
+      "symbol": "AXISBANK",
+      "name": "Axis Bank",
+      "sector": "BANKING",
+      "weight": 11.2
+    },
+    {
+      "symbol": "SBIN",
+      "name": "SBI",
+      "sector": "BANKING",
+      "weight": 8.9
+    },
+    {
+      "symbol": "INDUSINDBK",
+      "name": "IndusInd Bank",
+      "sector": "BANKING",
+      "weight": 5.4
+    },
+    {
+      "symbol": "BANKBARODA",
+      "name": "Bank of Baroda",
+      "sector": "BANKING",
+      "weight": 3.2
+    },
+    {
+      "symbol": "FEDERALBNK",
+      "name": "Federal Bank",
+      "sector": "BANKING",
+      "weight": 2.8
+    },
+    {
+      "symbol": "IDFCFIRSTB",
+      "name": "IDFC First",
+      "sector": "BANKING",
+      "weight": 2.6
+    },
+    {
+      "symbol": "BANDHANBNK",
+      "name": "Bandhan Bank",
+      "sector": "BANKING",
+      "weight": 2.5
+    }
+  ]
+}

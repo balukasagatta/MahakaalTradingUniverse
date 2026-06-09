@@ -567,6 +567,31 @@ _oi_last_time = None
 _heatmap_cache = {}
 _heatmap_cache_time = {}  # per expiry
 
+_stocks_cache = {}
+_stocks_cache_time = {}
+
+def _load_constituents(symbol: str) -> list:
+    import json as _json
+    try:
+        constituents = _json.load(open(os.path.expanduser('~/mahakaal/index_constituents.json')))
+        sym_map      = _json.load(open(os.path.expanduser('~/mahakaal/dhan_sym_map.json')))
+        stocks = constituents.get(symbol, [])
+        result = []
+        for s in stocks:
+            sid = sym_map.get(s['symbol'])
+            if sid:
+                result.append({
+                    'name':   s['name'],
+                    'symbol': s['symbol'],
+                    'sector': s.get('sector','OTHER'),
+                    'weight': s['weight'],
+                    'id':     sid
+                })
+        return result
+    except Exception as e:
+        print(f'[STOCKS] Error loading constituents: {e}')
+        return []
+
 # ── TREND ENGINE ──────────────────────────────────────────────────────────────
 def _compute_supertrend(highs, lows, closes, period=10, multiplier=2.0):
     import math
@@ -843,5 +868,54 @@ async def get_heatmap(expiry: str = ''):
         _heatmap_cache[cache_key] = result
         _heatmap_cache_time[cache_key] = datetime.now(IST)
         return result
+    except Exception as e:
+        return {'error': str(e)}
+
+@router.get('/stocks')
+async def get_stocks(symbol: str = 'SENSEX'):
+    global _stocks_cache, _stocks_cache_time
+    cache_key = symbol
+    if cache_key in _stocks_cache and cache_key in _stocks_cache_time:
+        age = (datetime.now(IST) - _stocks_cache_time[cache_key]).total_seconds()
+        if age < 30:
+            return _stocks_cache[cache_key]
+    try:
+        constituents = _load_constituents(symbol)
+        if not constituents:
+            return {'error': f'No constituents for {symbol}'}
+        ids = [s['id'] for s in constituents]
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.post(
+                'https://api.dhan.co/v2/marketfeed/ohlc',
+                json={'NSE_EQ': ids},
+                headers=_dhan_headers()
+            )
+        if r.status_code != 200:
+            return {'error': r.text[:200]}
+        data = r.json().get('data', {}).get('NSE_EQ', {})
+        result = []
+        for s in constituents:
+            d = data.get(str(s['id']), {})
+            ltp        = d.get('last_price', 0)
+            ohlc       = d.get('ohlc', {})
+            prev_close = ohlc.get('close', 0)
+            open_price = ohlc.get('open', 0)
+            if prev_close and prev_close != ltp:
+                chg = round((ltp - prev_close) / prev_close * 100, 2)
+            elif open_price and open_price != ltp:
+                chg = round((ltp - open_price) / open_price * 100, 2)
+            else:
+                chg = round((ltp - open_price) / open_price * 100, 2) if open_price else 0
+            result.append({
+                'name': s['name'], 'symbol': s['symbol'],
+                'sector': s.get('sector', 'OTHER'),
+                'weight': s['weight'], 'ltp': ltp,
+                'chg_pct': chg, 'open': open_price, 'prev_close': prev_close,
+            })
+        result.sort(key=lambda x: x['chg_pct'], reverse=True)
+        out = {'symbol': symbol, 'stocks': result}
+        _stocks_cache[cache_key] = out
+        _stocks_cache_time[cache_key] = datetime.now(IST)
+        return out
     except Exception as e:
         return {'error': str(e)}
