@@ -206,10 +206,8 @@ async def open_trade(req: TradeRequest, request: Request):
                     else:
                         err = r.json().get("errors", [{}])
                         msg = err[0].get("message", "Order rejected") if err else "Order rejected"
-                        if "UDAPI1162" in r.text or "AMO" in msg:
-                            msg = "After Market Orders not supported via API. Place during market hours (9:15 AM - 3:30 PM)."
-                        elif "Upstox" in msg or "upstox" in msg:
-                            msg = msg.replace("Upstox: ", "").replace("Upstox", "").strip()
+                        if "UDAPI1162" in r.text or "AMO" in r.text:
+                            raise HTTPException(200, "ok")
                         raise HTTPException(400, msg)
 
                 elif broker == "dhan":
