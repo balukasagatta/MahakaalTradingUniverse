@@ -880,36 +880,56 @@ export default function App({ user, onLogout }) {
               {heatmap&&(
                 <div style={{background:T.surface,borderRadius:12,border:`1px solid ${T.line}`,overflow:"hidden",marginBottom:12}}>
 
-                  {/* Header */}
-                  <div style={{padding:"10px 12px",borderBottom:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:T.raised}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase"}}>Options Intelligence</span>
-                      <span style={{padding:"2px 7px",borderRadius:8,fontFamily:mono,fontSize:9,fontWeight:700,
-                        background:heatmap.overall_bias==="BULLISH"?T.buy+"22":heatmap.overall_bias==="BEARISH"?T.sell+"22":T.line,
-                        color:heatmap.overall_bias==="BULLISH"?T.buy:heatmap.overall_bias==="BEARISH"?T.sell:T.subtle}}>
-                        {heatmap.overall_bias}
-                      </span>
-                      <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:heatmap.pcr>1.2?T.buy:heatmap.pcr<0.8?T.sell:T.subtle}}>PCR {heatmap.pcr}</span>
+                  {/* ── Control Bar: tabs + filters in one row ── */}
+                  <div style={{borderBottom:`1px solid ${T.line}`}}>
+                    {/* Top row: title + filters */}
+                    <div style={{padding:"8px 12px 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{width:3,height:14,borderRadius:2,background:heatmap.overall_bias==="BULLISH"?T.buy:heatmap.overall_bias==="BEARISH"?T.sell:T.subtle}}/>
+                          <span style={{fontFamily:mono,fontSize:11,fontWeight:700,color:T.ink}}>Options Flow</span>
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",gap:6,padding:"3px 8px",borderRadius:6,
+                          background:heatmap.overall_bias==="BULLISH"?T.buy+"15":heatmap.overall_bias==="BEARISH"?T.sell+"15":T.raised,
+                          border:`1px solid ${heatmap.overall_bias==="BULLISH"?T.buy+"40":heatmap.overall_bias==="BEARISH"?T.sell+"40":T.line}`}}>
+                          <span style={{fontFamily:mono,fontSize:10,fontWeight:700,
+                            color:heatmap.overall_bias==="BULLISH"?T.buy:heatmap.overall_bias==="BEARISH"?T.sell:T.subtle}}>
+                            {heatmap.overall_bias==="BULLISH"?"▲":heatmap.overall_bias==="BEARISH"?"▼":"—"} {heatmap.overall_bias}
+                          </span>
+                          <span style={{fontFamily:mono,fontSize:9,color:T.subtle}}>·</span>
+                          <span style={{fontFamily:mono,fontSize:10,fontWeight:600,
+                            color:heatmap.pcr>1.2?T.buy:heatmap.pcr<0.8?T.sell:T.subtle}}>
+                            PCR {heatmap.pcr}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                        <select onChange={e=>fetchHeatmap("",e.target.value)} defaultValue={symbol}
+                          style={{fontFamily:mono,fontSize:9,color:T.subtle,background:"transparent",border:"none",outline:"none",cursor:"pointer"}}>
+                          {["SENSEX","NIFTY","BANKNIFTY","FINNIFTY"].map(s=>(<option key={s} value={s}>{s}</option>))}
+                        </select>
+                        <div style={{width:1,height:12,background:T.line}}/>
+                        <select value={hmExpiry} onChange={e=>{setHmExpiry(e.target.value);fetchHeatmap(e.target.value)}}
+                          style={{fontFamily:mono,fontSize:9,color:T.subtle,background:"transparent",border:"none",outline:"none",cursor:"pointer"}}>
+                          {(heatmap.all_expiries||[]).map(ex=>(<option key={ex} value={ex}>{ex.slice(5)}</option>))}
+                        </select>
+                        <button onPointerDown={()=>fetchHeatmap(hmExpiry)}
+                          style={{fontFamily:mono,fontSize:11,color:T.subtle,background:"none",border:"none",cursor:"pointer",padding:"0 2px",lineHeight:1}}>↻</button>
+                      </div>
                     </div>
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <select value={hmExpiry} onChange={e=>{setHmExpiry(e.target.value);fetchHeatmap(e.target.value)}}
-                        style={{fontFamily:mono,fontSize:9,color:T.ink,background:T.raised,border:`1px solid ${T.line}`,borderRadius:4,padding:"2px 4px",outline:"none"}}>
-                        {(heatmap.all_expiries||[]).map(ex=>(<option key={ex} value={ex}>{ex.slice(5)}</option>))}
-                      </select>
-                      <button onPointerDown={()=>fetchHeatmap(hmExpiry)} style={{fontFamily:mono,fontSize:10,color:T.brand,background:"none",border:`1px solid ${T.brand}33`,borderRadius:4,padding:"2px 7px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>↻</button>
+                    {/* Tab row */}
+                    <div style={{display:"flex",padding:"0 12px",gap:0}}>
+                      {["OI Change","Pullers/Draggers","OI Walls","Intervals"].map((t,i)=>(
+                        <button key={t} onPointerDown={()=>{setOiTab(i);if(i===1)fetchStocks(symbol)}}
+                          style={{padding:"8px 14px",border:"none",borderBottom:oiTab===i?`2px solid ${T.brand}`:"2px solid transparent",
+                            background:"none",color:oiTab===i?T.ink:T.subtle,
+                            fontFamily:inter,fontWeight:oiTab===i?700:500,fontSize:11,
+                            cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",
+                            marginBottom:-1,transition:"color .15s"}}>
+                          {t}
+                        </button>
+                      ))}
                     </div>
-                  </div>
-
-                  {/* Tab bar */}
-                  <div style={{display:"flex",background:T.raised,borderBottom:`1px solid ${T.line}`}}>
-                    {["OI Change","Pullers/Draggers","OI Walls","Intervals"].map((t,i)=>(
-                      <button key={t} onPointerDown={()=>{setOiTab(i);if(i===1)fetchStocks(symbol)}}
-                        style={{flex:1,minHeight:32,border:"none",borderBottom:oiTab===i?`2px solid ${T.brand}`:"2px solid transparent",
-                          background:"none",color:oiTab===i?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:9,
-                          cursor:"pointer",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",padding:"0 2px"}}>
-                        {t}
-                      </button>
-                    ))}
                   </div>
 
                   {/* ── TAB 0: OI Change — color heatmap table ── */}
