@@ -1049,39 +1049,141 @@ export default function App({ user, onLogout }) {
                     </div>
                   )}
 
-                  {/* ── TAB 4: Stock Heatmap ── */}
-                  {oiTab===1&&(
+                  {/* ── TAB 1: Pullers / Draggers — Squarified Treemap ── */}
+                  {oiTab===1&&(()=>{
+                    // Squarified treemap algorithm
+                    const squarify = (items, rect) => {
+                      if (!items.length) return []
+                      const totalVal = items.reduce((s,i)=>s+i.value,0)
+                      const rectArea = rect.w * rect.h
+                      const tiles = []
+                      let remaining = [...items]
+                      let r = {...rect}
+                      while (remaining.length) {
+                        const isHoriz = r.w >= r.h
+                        const side = isHoriz ? r.h : r.w
+                        let row = [], rowVal = 0, bestRatio = Infinity
+                        for (let i=0; i<remaining.length; i++) {
+                          const item = remaining[i]
+                          rowVal += item.value
+                          row.push(item)
+                          const rowArea = (rowVal/totalVal)*rectArea
+                          const rowSide = rowArea/side
+                          const ratio = Math.max(...row.map(it=>{
+                            const tileArea = (it.value/totalVal)*rectArea
+                            const tileOther = tileArea/rowSide
+                            return Math.max(rowSide/tileOther, tileOther/rowSide)
+                          }))
+                          if (ratio > bestRatio) { row.pop(); rowVal -= item.value; break }
+                          bestRatio = ratio
+                        }
+                        // Layout row tiles
+                        const rowArea = (rowVal/totalVal)*rectArea
+                        const rowSide = rowArea/side
+                        let pos = isHoriz ? r.y : r.x
+                        for (const item of row) {
+                          const tileArea = (item.value/totalVal)*rectArea
+                          const tileOther = tileArea/rowSide
+                          tiles.push({
+                            ...item,
+                            x: isHoriz ? r.x : pos,
+                            y: isHoriz ? pos : r.y,
+                            w: isHoriz ? rowSide : tileOther,
+                            h: isHoriz ? tileOther : rowSide,
+                          })
+                          pos += tileOther
+                        }
+                        // Shrink rect
+                        if (isHoriz) { r = {...r, x:r.x+rowSide, w:r.w-rowSide} }
+                        else         { r = {...r, y:r.y+rowSide, h:r.h-rowSide} }
+                        remaining = remaining.slice(row.length)
+                      }
+                      return tiles
+                    }
+
+                    const chgColor = (chg, dark) => {
+                      const cap = 2
+                      const t = Math.min(1, Math.abs(chg)/cap)
+                      if (chg > 0) return dark
+                        ? `rgba(46,125,50,${0.25+t*0.65})`
+                        : `rgba(46,125,50,${0.15+t*0.6})`
+                      if (chg < 0) return dark
+                        ? `rgba(198,40,40,${0.25+t*0.65})`
+                        : `rgba(198,40,40,${0.15+t*0.6})`
+                      return dark ? '#2A2A2A' : '#E8E4DE'
+                    }
+
+                    const W = 340, H = 220
+                    const stockList = stocks?.stocks || []
+                    const items = stockList.map(s=>({
+                      symbol: s.symbol, name: s.name,
+                      sector: s.sector, weight: s.weight,
+                      chg: s.chg_pct||0, ltp: s.ltp,
+                      value: s.weight
+                    })).sort((a,b)=>b.value-a.value)
+
+                    const tiles = squarify(items, {x:0,y:0,w:W,h:H})
+                    const top3 = [...stockList].sort((a,b)=>b.chg_pct-a.chg_pct).slice(0,3)
+                    const bot3 = [...stockList].sort((a,b)=>a.chg_pct-b.chg_pct).slice(0,3)
+
+                    return(
                     <div style={{padding:"8px"}}>
                       {!stocks
                         ?<div style={{textAlign:"center",padding:"28px",color:T.subtle,fontSize:12}}>Loading...</div>
                         :<div>
-                          <div style={{fontFamily:mono,fontSize:8,color:T.subtle,marginBottom:8,letterSpacing:"1px"}}>
-                            {symbol} TOP CONSTITUENTS · % CHANGE TODAY
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-                            {(stocks.stocks||[]).map(s=>{
-                              const chg = s.chg_pct||0
-                              const bg = chg>1.5?T.buy+"33":chg>0.5?T.buy+"1A":chg>0?T.buy+"0D":
-                                         chg<-1.5?T.sell+"33":chg<-0.5?T.sell+"1A":T.sell+"0D"
-                              const col = chg>0?T.buy:chg<0?T.sell:T.subtle
+                          {/* Treemap SVG */}
+                          <div style={{fontFamily:mono,fontSize:7,color:T.subtle,letterSpacing:"1px",marginBottom:6,textTransform:"uppercase"}}>{stocks.symbol} Constituents · Tile size = Index weight · Color = % change</div>
+                          <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",borderRadius:8,display:"block",marginBottom:8}} preserveAspectRatio="xMidYMid meet">
+                            {tiles.map((t,i)=>{
+                              const bg = chgColor(t.chg, dark)
+                              const textCol = "#fff"
+                              const showSymbol = t.w > 40 && t.h > 20
+                              const showChg   = t.w > 40 && t.h > 32
+                              const fs = Math.min(10, Math.max(6, t.w/6))
                               return(
-                              <div key={s.name} style={{padding:"8px 10px",borderRadius:8,background:bg,
-                                border:`1px solid ${chg>0?T.buy+"33":T.sell+"33"}`}}>
-                                <div style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.ink,marginBottom:2}}>{s.name}</div>
-                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                                  <div style={{fontFamily:mono,fontSize:11,color:T.body}}>₹{s.ltp?.toLocaleString('en-IN')}</div>
-                                  <div style={{fontFamily:mono,fontSize:11,fontWeight:700,color:col}}>
-                                    {chg>=0?"+":""}{chg.toFixed(2)}%
-                                  </div>
-                                </div>
-                                <div style={{fontFamily:mono,fontSize:7,color:T.subtle,marginTop:2}}>{s.weight}% weight</div>
-                              </div>
+                              <g key={t.symbol}>
+                                <rect x={t.x+1} y={t.y+1} width={Math.max(0,t.w-2)} height={Math.max(0,t.h-2)}
+                                  fill={bg} rx={2}/>
+                                {showSymbol&&<text x={t.x+t.w/2} y={t.y+t.h/2-(showChg?5:0)}
+                                  textAnchor="middle" dominantBaseline="middle"
+                                  fill={textCol} fontSize={fs} fontWeight="700" fontFamily="monospace"
+                                  style={{pointerEvents:"none"}}>
+                                  {t.symbol}
+                                </text>}
+                                {showChg&&<text x={t.x+t.w/2} y={t.y+t.h/2+8}
+                                  textAnchor="middle" dominantBaseline="middle"
+                                  fill={textCol} fontSize={Math.max(6,fs-1)} fontFamily="monospace"
+                                  style={{pointerEvents:"none"}}>
+                                  {t.chg>=0?"+":""}{t.chg.toFixed(1)}%
+                                </text>}
+                              </g>
                             )})}
+                          </svg>
+                          {/* Pullers & Draggers summary */}
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                            <div style={{padding:"8px",background:T.buy+"11",borderRadius:8,border:`1px solid ${T.buy}33`}}>
+                              <div style={{fontFamily:mono,fontSize:7,color:T.buy,letterSpacing:"1px",marginBottom:5}}>▲ PULLERS</div>
+                              {top3.map(s=>(
+                                <div key={s.symbol} style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                                  <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.ink}}>{s.symbol}</span>
+                                  <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.buy}}>+{s.chg_pct?.toFixed(2)}%</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{padding:"8px",background:T.sell+"11",borderRadius:8,border:`1px solid ${T.sell}33`}}>
+                              <div style={{fontFamily:mono,fontSize:7,color:T.sell,letterSpacing:"1px",marginBottom:5}}>▼ DRAGGERS</div>
+                              {bot3.map(s=>(
+                                <div key={s.symbol} style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                                  <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.ink}}>{s.symbol}</span>
+                                  <span style={{fontFamily:mono,fontSize:9,fontWeight:700,color:T.sell}}>{s.chg_pct?.toFixed(2)}%</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       }
                     </div>
-                  )}
+                  )})()}
 
                   {/* Footer */}
                   <div style={{padding:"6px 12px",borderTop:`1px solid ${T.line}`,display:"flex",justifyContent:"space-between",background:T.raised}}>
