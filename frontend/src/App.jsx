@@ -131,6 +131,9 @@ export default function App({ user, onLogout }) {
   const [brokerStatus, setBrokerStatus] = useState('disconnected')
   const [pendingOrders, setPendingOrders] = useState([])
   const [drawerTab,  setDrawerTab]  = useState("broker")
+  const [heatmap,    setHeatmap]    = useState(null)
+  const [hmExpiry,   setHmExpiry]   = useState("")
+  const [trend,      setTrend]      = useState(null)
   const [editingCfg, setEditingCfg] = useState(false)
   const [localCfg,   setLocalCfg]   = useState({})
   const [cfgSaved,   setCfgSaved]   = useState(false)
@@ -179,6 +182,9 @@ export default function App({ user, onLogout }) {
 
     // Polling (WS not yet available)
     const pollMarket = async () => { const r=await apiFetch("/vajra/market"); if(r) setMarket(r) }
+    fetchTrend()
+    fetchHeatmap()
+    const trendInterval = setInterval(fetchTrend, 60000)
     const pollState  = async () => {
       await apiFetch("/vajra/orders/sync", {method:"POST"})  // sync pending orders
       const r = await apiFetch("/vajra/state")
@@ -193,7 +199,7 @@ export default function App({ user, onLogout }) {
     pollState();  const t2=setInterval(pollState,10000)
     pollingTimers.current = [t1,t2]
 
-    return () => {
+    return () => { clearInterval(trendInterval);
       window.removeEventListener("resize", onResize)
       pollingTimers.current.forEach(clearInterval)
       if (renderFrame.current) clearTimeout(renderFrame.current)
@@ -447,6 +453,17 @@ export default function App({ user, onLogout }) {
   const lbl = t => <div style={{fontFamily:mono,fontSize:8,fontWeight:600,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:3}}>{t}</div>
 
   const haptic = () => { try { navigator.vibrate && navigator.vibrate(30) } catch(e){} }
+
+  const fetchHeatmap = async (expiry="") => {
+    const url = expiry ? `/vajra/heatmap?expiry=${expiry}` : "/vajra/heatmap"
+    const r = await apiFetch(url)
+    if (r && !r.error) { setHeatmap(r); setHmExpiry(r.expiry) }
+  }
+
+  const fetchTrend = async () => {
+    const r = await apiFetch("/vajra/trend")
+    if (r) setTrend(r)
+  }
   const ExecBtn = ({ text, sub, onClick, color }) => (
     <button onPointerDown={onClick}
       style={{
@@ -772,8 +789,8 @@ export default function App({ user, onLogout }) {
         )}
       </div>
 
-      {/* Tabs + Positions — scrollable, never pushes trading panel */}
-      <div style={{padding:"0 12px 40px"}}>
+      {/* Tabs + Positions — natural page scroll */}
+      <div style={{padding:"0 12px 80px"}}>
         <div style={{display:"flex",alignItems:"center",borderBottom:`1px solid ${T.line}`}}>
           {[["positions","Positions"],["orders","Orders"],["journal","Trade Book"]].map(([k,l])=>(
             <button key={k} onPointerDown={()=>setTab(k)} style={{minHeight:40,padding:"0 12px",border:"none",borderBottom:tab===k?`2px solid ${T.brand}`:"2px solid transparent",background:"none",color:tab===k?T.brand:T.subtle,fontFamily:inter,fontWeight:600,fontSize:12,cursor:"pointer",marginBottom:-1,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>{l}</button>
@@ -784,7 +801,7 @@ export default function App({ user, onLogout }) {
           </div>
         </div>
 
-        <div style={{maxHeight:"calc(100vh - 340px)",overflow:"auto",overscrollBehavior:"contain"}}>
+        <div>
 
           {tab==="positions"&&(
             <div>
@@ -822,6 +839,80 @@ export default function App({ user, onLogout }) {
                   )
                 })
               }
+            </div>
+          )}
+
+          {/* ── Heatmap + Trend — always visible below positions ── */}
+          {tab==="positions"&&heatmap&&(
+            <div style={{padding:"0 0 8px"}}>
+              {/* Trend Engine */}
+              {trend&&(
+                <div style={{margin:"12px 0 8px",padding:"12px",background:T.surface,borderRadius:10,border:`1px solid ${T.line}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase"}}>Adaptive SuperTrend</div>
+                    <div style={{fontFamily:mono,fontSize:8,color:T.subtle}}>{trend.regime} VOL · ATR {trend.atr}</div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{
+                      padding:"6px 16px",borderRadius:20,fontFamily:mono,fontSize:13,fontWeight:700,
+                      background:trend.bias==="BULLISH"?T.buy:trend.bias==="BEARISH"?T.sell:"#7A7670",
+                      color:"#fff"
+                    }}>{trend.bias==="BULLISH"?"▲ BULLISH":trend.bias==="BEARISH"?"▼ BEARISH":"◆ CHOPPY"}</div>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontFamily:mono,fontSize:9,color:T.subtle,marginBottom:3}}>
+                        <span>Confidence</span><span>{trend.confidence}%</span>
+                      </div>
+                      <div style={{background:T.line,borderRadius:100,height:4}}>
+                        <div style={{width:`${trend.confidence}%`,height:"100%",borderRadius:100,
+                          background:trend.bias==="BULLISH"?T.buy:trend.bias==="BEARISH"?T.sell:"#7A7670"}}/>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* OI Heatmap */}
+              <div style={{margin:"8px 0",padding:"12px",background:T.surface,borderRadius:10,border:`1px solid ${T.line}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <div style={{fontFamily:mono,fontSize:8,color:T.subtle,letterSpacing:"1.5px",textTransform:"uppercase"}}>OI Heatmap</div>
+                  <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                    <div style={{fontFamily:mono,fontSize:9,color:T.subtle}}>PCR {heatmap.pcr}</div>
+                    <div style={{width:1,height:10,background:T.line}}/>
+                    <select value={hmExpiry} onChange={e=>{setHmExpiry(e.target.value);fetchHeatmap(e.target.value)}}
+                      style={{fontFamily:mono,fontSize:9,color:T.ink,background:T.raised,border:`1px solid ${T.line}`,borderRadius:4,padding:"2px 4px",outline:"none"}}>
+                      {(heatmap.all_expiries||[]).map(ex=>(
+                        <option key={ex} value={ex}>{ex}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {/* CE/PE OI bars */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:"2px 6px",alignItems:"center"}}>
+                  <div style={{fontFamily:mono,fontSize:7,color:T.sell,textAlign:"right",marginBottom:4}}>CE OI</div>
+                  <div style={{fontFamily:mono,fontSize:7,color:T.subtle,textAlign:"center",marginBottom:4}}>STRIKE</div>
+                  <div style={{fontFamily:mono,fontSize:7,color:T.buy,marginBottom:4}}>PE OI</div>
+                  {(heatmap.heatmap||[]).map(row=>{
+                    const maxOi = Math.max(...(heatmap.heatmap||[]).map(r=>Math.max(r.ce_oi,r.pe_oi)))
+                    const cePct = maxOi ? (row.ce_oi/maxOi)*100 : 0
+                    const pePct = maxOi ? (row.pe_oi/maxOi)*100 : 0
+                    return(<>
+                      <div key={`ce-${row.strike}`} style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:4}}>
+                        <span style={{fontFamily:mono,fontSize:8,color:T.subtle}}>{row.ce_oi>999999?(row.ce_oi/100000).toFixed(1)+"L":(row.ce_oi/1000).toFixed(0)+"K"}</span>
+                        <div style={{width:`${cePct}%`,maxWidth:80,height:row.is_atm?8:5,background:row.is_atm?T.sell+"CC":T.sell+"66",borderRadius:2,minWidth:2}}/>
+                      </div>
+                      <div key={`st-${row.strike}`} style={{fontFamily:mono,fontSize:row.is_atm?10:8,fontWeight:row.is_atm?700:400,color:row.is_atm?T.brand:T.subtle,textAlign:"center",background:row.is_atm?T.brand+"15":"transparent",borderRadius:3,padding:"1px 3px"}}>{row.strike}</div>
+                      <div key={`pe-${row.strike}`} style={{display:"flex",alignItems:"center",gap:4}}>
+                        <div style={{width:`${pePct}%`,maxWidth:80,height:row.is_atm?8:5,background:row.is_atm?T.buy+"CC":T.buy+"66",borderRadius:2,minWidth:2}}/>
+                        <span style={{fontFamily:mono,fontSize:8,color:T.subtle}}>{row.pe_oi>999999?(row.pe_oi/100000).toFixed(1)+"L":(row.pe_oi/1000).toFixed(0)+"K"}</span>
+                      </div>
+                    </>)
+                  })}
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontFamily:mono,fontSize:9,color:T.subtle}}>
+                  <span>Total CE: {heatmap.total_ce_oi>999999?(heatmap.total_ce_oi/100000).toFixed(1)+"L":(heatmap.total_ce_oi/1000).toFixed(0)+"K"}</span>
+                  <span style={{color:heatmap.pcr>1?T.buy:heatmap.pcr<0.7?T.sell:T.subtle}}>PCR {heatmap.pcr} {heatmap.pcr>1?"(Bullish)":heatmap.pcr<0.7?"(Bearish)":"(Neutral)"}</span>
+                  <span>Total PE: {heatmap.total_pe_oi>999999?(heatmap.total_pe_oi/100000).toFixed(1)+"L":(heatmap.total_pe_oi/1000).toFixed(0)+"K"}</span>
+                </div>
+              </div>
             </div>
           )}
 

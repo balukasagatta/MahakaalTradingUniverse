@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import httpx, json, os
-from datetime import datetime
+from datetime import datetime, timedelta, timedelta
 import pytz
 
 from token_manager import get_upstox_token
@@ -346,7 +346,7 @@ async def get_orders(request: Request):
 @router.post("/trade/close-all")
 async def close_all_trades(request: Request):
     import sqlite3
-    from datetime import datetime
+    from datetime import datetime, timedelta, timedelta
     conn = sqlite3.connect(os.path.expanduser("~/mahakaal/pragnya.db"))
     now = datetime.now(IST).strftime("%H:%M:%S")
     n = conn.execute(
@@ -537,3 +537,188 @@ async def get_rewards(request: Request):
         return {"total_points": total, "history": history, "eod": eod, "violations": violations}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+# ── DHAN CREDENTIALS ─────────────────────────────────────────────────────────
+import subprocess as _sp
+def _dhan_creds():
+    env = {}
+    try:
+        for line in open(os.path.expanduser('~/mahakaal/env.vars')):
+            line = line.strip()
+            if '=' in line and not line.startswith('#'):
+                k,v = line.split('=',1)
+                env[k.strip()] = v.strip()
+    except: pass
+    return env.get('DHAN_ACCESS_TOKEN',''), env.get('DHAN_CLIENT_ID','')
+
+def _dhan_headers():
+    tok, cid = _dhan_creds()
+    return {'access-token': tok, 'client-id': cid, 'Content-Type': 'application/json'}
+
+# ── TREND ENGINE ──────────────────────────────────────────────────────────────
+def _compute_supertrend(highs, lows, closes, period=10, multiplier=3.0):
+    import math
+    n = len(closes)
+    if n < period + 1:
+        return 'CHOPPY', 50, 0.0
+    # Compute ATR
+    trs = []
+    for i in range(1, n):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        trs.append(tr)
+    # Smoothed ATR
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period-1) + trs[i]) / period
+    # Volatility regime
+    recent_atrs = trs[-20:] if len(trs) >= 20 else trs
+    avg_atr = sum(recent_atrs) / len(recent_atrs)
+    if atr < avg_atr * 0.7:
+        regime = 'LOW'; mult = multiplier * 0.8
+    elif atr > avg_atr * 1.3:
+        regime = 'HIGH'; mult = multiplier * 1.2
+    else:
+        regime = 'NORMAL'; mult = multiplier
+    # SuperTrend bands
+    hl2 = [(highs[i]+lows[i])/2 for i in range(n)]
+    upper = [hl2[i] + mult*atr for i in range(n)]
+    lower = [hl2[i] - mult*atr for i in range(n)]
+    # Final SuperTrend direction
+    direction = 1  # 1=bullish, -1=bearish
+    st = lower[-1]
+    for i in range(1, n):
+        if closes[i] > upper[i-1]:
+            direction = 1; st = lower[i]
+        elif closes[i] < lower[i-1]:
+            direction = -1; st = upper[i]
+        else:
+            st = lower[i] if direction == 1 else upper[i]
+    # Confidence based on consecutive candles in same direction
+    last_close = closes[-1]
+    distance = abs(last_close - st) / atr if atr else 0
+    confidence = min(95, int(50 + distance * 15))
+    if direction == 1:
+        bias = 'BULLISH'
+    else:
+        bias = 'BEARISH'
+    # Check choppy — if last 5 candles oscillate
+    if len(closes) >= 5:
+        chg = [closes[i]-closes[i-1] for i in range(len(closes)-5, len(closes))]
+        flips = sum(1 for i in range(1,len(chg)) if chg[i]*chg[i-1]<0)
+        if flips >= 3:
+            bias = 'CHOPPY'; confidence = max(30, confidence-20)
+    return bias, confidence, round(atr, 2)
+
+@router.get('/trend')
+async def get_trend():
+    try:
+        tok, cid = _dhan_creds()
+        if not tok:
+            return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'UNKNOWN','error':'No Dhan token'}
+        now_ist = datetime.now(IST)
+        from_dt = (now_ist - timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
+        to_dt   = now_ist.strftime('%Y-%m-%d %H:%M:%S')
+        # Sensex security_id=13, IDX_I segment
+        payload = {
+            'securityId': '13',
+            'exchangeSegment': 'IDX_I',
+            'instrument': 'INDEX',
+            'interval': '1',
+            'oi': False,
+            'fromDate': from_dt,
+            'toDate': to_dt
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                'https://api.dhan.co/v2/charts/intraday',
+                json=payload,
+                headers=_dhan_headers()
+            )
+        if r.status_code != 200:
+            return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'UNKNOWN','error':r.text[:200]}
+        data = r.json()
+        highs  = data.get('high',[])
+        lows   = data.get('low',[])
+        closes = data.get('close',[])
+        if len(closes) < 15:
+            return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'INSUFFICIENT_DATA'}
+        bias, confidence, atr = _compute_supertrend(highs, lows, closes)
+        regime = 'LOW' if atr < 10 else 'HIGH' if atr > 30 else 'NORMAL'
+        return {'bias': bias, 'confidence': confidence, 'atr': atr, 'regime': regime, 'candles': len(closes)}
+    except Exception as e:
+        return {'bias':'CHOPPY','confidence':0,'atr':0,'regime':'UNKNOWN','error':str(e)}
+
+@router.get('/heatmap')
+async def get_heatmap(expiry: str = ''):
+    try:
+        tok, cid = _dhan_creds()
+        if not tok:
+            return {'error': 'No Dhan token'}
+        # Get expiry list if not provided
+        async with httpx.AsyncClient(timeout=10) as client:
+            if not expiry:
+                er = await client.post(
+                    'https://api.dhan.co/v2/optionchain/expirylist',
+                    json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I'},
+                    headers=_dhan_headers()
+                )
+                expiries = er.json().get('data', [])
+                expiry = expiries[0] if expiries else ''
+                all_expiries = expiries[:4]  # next 4 expiries
+            else:
+                er = await client.post(
+                    'https://api.dhan.co/v2/optionchain/expirylist',
+                    json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I'},
+                    headers=_dhan_headers()
+                )
+                all_expiries = er.json().get('data', [])[:4]
+            # Fetch option chain
+            cr = await client.post(
+                'https://api.dhan.co/v2/optionchain',
+                json={'UnderlyingScrip': 13, 'UnderlyingSeg': 'IDX_I', 'Expiry': expiry},
+                headers=_dhan_headers()
+            )
+        if cr.status_code != 200:
+            return {'error': cr.text[:200]}
+        chain_data = cr.json().get('data', {})
+        spot = chain_data.get('last_price', 0)
+        oc = chain_data.get('oc', {})
+        # Build strikes array sorted, ATM ± 10 strikes
+        strikes = sorted([float(k) for k in oc.keys()])
+        atm = min(strikes, key=lambda x: abs(x - spot)) if strikes else 0
+        atm_idx = strikes.index(atm) if atm in strikes else len(strikes)//2
+        selected = strikes[max(0, atm_idx-8):atm_idx+9]
+        heatmap = []
+        total_ce_oi = total_pe_oi = 0
+        for s in selected:
+            sk = str(s) if str(s) in oc else f'{s:.6f}'
+            # Try both formats
+            entry = oc.get(sk) or oc.get(str(int(s))) or {}
+            ce = entry.get('ce', {})
+            pe = entry.get('pe', {})
+            ce_oi = ce.get('oi', 0)
+            pe_oi = pe.get('oi', 0)
+            ce_ltp = ce.get('last_price', 0)
+            pe_ltp = pe.get('last_price', 0)
+            ce_iv  = round(ce.get('implied_volatility', 0), 1)
+            pe_iv  = round(pe.get('implied_volatility', 0), 1)
+            total_ce_oi += ce_oi
+            total_pe_oi += pe_oi
+            heatmap.append({
+                'strike': int(s),
+                'ce_oi': ce_oi, 'pe_oi': pe_oi,
+                'ce_ltp': ce_ltp, 'pe_ltp': pe_ltp,
+                'ce_iv': ce_iv, 'pe_iv': pe_iv,
+                'is_atm': s == atm
+            })
+        pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi else 0
+        return {
+            'spot': spot, 'expiry': expiry,
+            'all_expiries': all_expiries,
+            'heatmap': heatmap,
+            'total_ce_oi': total_ce_oi,
+            'total_pe_oi': total_pe_oi,
+            'pcr': pcr
+        }
+    except Exception as e:
+        return {'error': str(e)}
