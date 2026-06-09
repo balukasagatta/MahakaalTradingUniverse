@@ -198,7 +198,7 @@ async def open_trade(req: TradeRequest, request: Request):
                         json=order_payload,
                         headers={"Authorization": f"Bearer {broker_token}", "Content-Type": "application/json", "Accept": "application/json"}
                     )
-                    print(f'Upstox response: {r.status_code} {r.text[:200]}')
+                    print(f'Upstox RAW response: {r.status_code} | {r.text[:500]}')
                     if r.status_code == 200:
                         upstox_order_id = r.json().get("data", {}).get("order_id")
                     elif r.status_code == 401:
@@ -206,8 +206,8 @@ async def open_trade(req: TradeRequest, request: Request):
                     else:
                         err = r.json().get("errors", [{}])
                         msg = err[0].get("message", "Order rejected") if err else "Order rejected"
-                        if "UDAPI1162" in r.text or "AMO" in r.text:
-                            raise HTTPException(200, "ok")
+                        if "UDAPI1162" in r.text:
+                            msg = "Orders can only be placed during market hours (9:15 AM - 3:30 PM)."
                         raise HTTPException(400, msg)
 
                 elif broker == "dhan":
