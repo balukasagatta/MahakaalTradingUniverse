@@ -188,6 +188,12 @@ def close_trade(trade_id: int, exit_price: float, pnl: float,
 def get_today_trades(product: str) -> list:
     conn = _conn()
     today = date.today().isoformat()
+    # Auto-cleanup: close any OPEN trades from previous days
+    conn.execute(
+        "UPDATE trades SET status='CLOSED', exit_reason='EOD_CLEANUP' WHERE status='OPEN' AND date < ?",
+        (today,)
+    )
+    conn.commit()
     rows = conn.execute(
         "SELECT id,date,time,product,strategy,instrument,direction,entry,exit_price,"
         "sl,target_price,pnl,status,exit_reason,hold_minutes,extra_json "
